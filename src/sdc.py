@@ -1,53 +1,7 @@
-from dataclasses import dataclass
 import numpy as np
 from firedrake import *
 from firedrake.output import VTKFile
-from FIAT.quadrature import GaussLobattoLegendreQuadratureLineRule
-from FIAT.reference_element import DefaultLine
-
-
-@dataclass
-class SDCPreconditioners:
-    M: float
-    prectype: int | str = 0
-
-    def __post_init__(self):
-        # Calculate collocation nodes in [-1,1] (main parameter in collocation problem)
-        gll_rule = GaussLobattoLegendreQuadratureLineRule(DefaultLine(), self.M)
-
-        self.tau = 0.5 * (
-            np.asarray(gll_rule.get_points()).flatten() + 1.0
-        )  # Change to [0,1]
-
-        # INstantiate the collocation matrix and the Q_Delta
-        self.Q = self._buildQ()
-        self.Q_D = self._Q_Delta()
-
-    def _buildQ(self):
-        tau = self.tau
-        M = self.M
-
-        # Create Vandermonde matrix mxm
-        V = np.vander(tau, N=M, increasing=True)
-
-        # Create the integrals of monomials by broadcasting
-        exps = np.arange(1, M + 1)
-        integrals = tau[:, None] ** exps / exps
-
-        # Calculate lagrange coef
-        coef = np.linalg.solve(V, np.eye(M))
-        Q = integrals @ coef
-
-        return Q
-
-    # We will include all preconditioners here Q_delta. (MIN-RES)
-    def _Q_Delta(self):
-        if self.prectype == 0:
-            return np.diag(self.Q)
-        elif self.prectype == "MIN-SR-NS":
-            return np.diag(np.diag([tau / self.M for tau in self.tau]))
-        else:
-            raise Exception("there's no other preconditioners defined")
+from .preconditioners import SDCPreconditioners
 
 
 class SDCSolver(SDCPreconditioners):
@@ -332,42 +286,3 @@ class SDCSolver(SDCPreconditioners):
             self.t_0_subinterval.assign(t)
             step += 1
             print(f"step : {step},  time = {t}")
-
-
-if __name__ == "__main__":
-
-    Tfinal = 10.0
-    dt = 1e-2
-    M = 4
-    nsweeps = 3
-
-    mesh = UnitSquareMesh(100, 100)
-    x = SpatialCoordinate(mesh)
-    xx, yy = x[0], x[1]
-    V = FunctionSpace(mesh, "CG", 1)
-
-    u0_expr = exp(-150 * ((xx - 0.25) ** 2 + (yy - 0.75) ** 2)) + 0.6 * sin(
-        pi * xx
-    ) * sin(2 * pi * yy)
-
-    def f(t, u, v, k=1.0, Q=2.0, w=pi):
-        # La v hay que meterla después dentro
-        # source = Q * sin(w * t) * sin(pi * xx) * sin(pi * yy)
-        source = Constant(0)
-        return -k * inner(grad(u), grad(v)) + source * v
-
-    bcs = DirichletBC
-    solver = SDCSolver(
-        mesh,
-        V,
-        f=f,
-        u0=u0_expr,
-        bcs=bcs,
-        M=M,
-        dt=dt,
-        is_paralell=True,
-        prectype="MIN-SR-NS",
-    )
-
-    uT = solver.solve(T=Tfinal, sweeps=nsweeps)
-    print("donessiiuuu")
