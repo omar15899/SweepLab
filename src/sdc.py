@@ -17,11 +17,13 @@ class SDCSolver(SDCPreconditioners):
         u0,
         bcs,
         M=4,
+        N = 1,
         dt=1e-3,
         is_linear=False,
         is_paralell=True,
         solver_parameters=None,
         prectype: int | str = 0,
+        tau: np.ndarray | None = None, 
         folder_name: str | None = None,
         file_name: str | None = None,
     ):
@@ -36,7 +38,7 @@ class SDCSolver(SDCPreconditioners):
         prectype : MIN-SR-FLEX, MIN-SR-S, DIAG1, ...,
         """
         # Initialise preconditioner infrastructure
-        super().__init__(M=M, prectype=prectype)
+        super().__init__(M=M, prectype=prectype, tau=tau)
 
         self.mesh = mesh
         self.V = V
@@ -45,6 +47,7 @@ class SDCSolver(SDCPreconditioners):
         self.f = f
         self.linear = is_linear
         self.solver_parameters = solver_parameters
+        self.N = N
 
         # Parametrise the mesh, this is crutial for defining f.
         self.x = SpatialCoordinate(self.mesh)  # x[0] = x, x[1] = y, x[n]= ...
@@ -68,11 +71,11 @@ class SDCSolver(SDCPreconditioners):
         ### TO INITIALISE IT IN A SIMPLER WAY.
         if is_paralell:
             # Use internal setting:
-            self.bcs = bcs(self.V, Constant(0.0), "on_boundary")
+            self.bcs = bcs(self.V, Constant(0.2), "on_boundary")
             self.v = None
         else:
             self.bcs = [
-                bcs(self.W.sub(i), Constant(0.0), "on_boundary") for i in range(self.M)
+                bcs(self.W.sub(i), Constant(0.2), "on_boundary") for i in range(self.M)
             ]
             self.v = TestFunctions(self.W)
 
@@ -87,6 +90,7 @@ class SDCSolver(SDCPreconditioners):
 
         # Initial time and instantiate the solvers
         self.t_0_subinterval = Constant(0.0)
+        self.scale = Constant(1.0)
         self._setup_paralell_solver() if is_paralell else self._setup_general_solver()
 
     def _solver_ensambler(self):
@@ -98,16 +102,15 @@ class SDCSolver(SDCPreconditioners):
         """
         deltat = self.deltat
         tau = self.tau
-        Q_D = self.Q_D
-        Q_diff = self.Q_diff
         t0 = self.t_0_subinterval
         f = self.f
-
+        Q   = self.Q
+        Q_D = self.Q_D                           
         # We could use the mixed space but it's nonsense, as we don't have coupling
         # among the different finite element subspaces.
         # We store the solvers
         self.solvers = []
-
+            
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
             # v_m = v[m]
@@ -121,13 +124,13 @@ class SDCSolver(SDCPreconditioners):
             #  assemble the part with u^{k+1}. We have to be very carefull as
             # v_m will be included in the function f.
             left = (
-                inner(u_m, v_m) - deltat * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
+                inner(u_m, v_m) - deltat * self.scale * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
             ) * dx  # f need to be composed with the change of variables
 
             # assemble part with u^{k}
-            right = inner(self.u_0.subfunctions[0], v_m)
+            right = inner(self.u_0.subfunctions[m], v_m)
             for j in range(self.M):
-                coeff = Q_diff[m, j]
+                coeff = Q[m, j] - self.scale * Q_D[m, j]
                 right += (
                     deltat
                     * coeff
@@ -166,8 +169,6 @@ class SDCSolver(SDCPreconditioners):
 
         deltat = self.deltat
         tau = self.tau
-        Q_D = self.Q_D
-        Q_diff = self.Q_diff
         t0 = self.t_0_subinterval
         u_0 = self.u_0
         u_k_prev = self.u_k_prev
@@ -179,6 +180,11 @@ class SDCSolver(SDCPreconditioners):
         v = self.v
         u_k_act_tup = split(u_k_act)
         Rm = 0
+        
+        Q   = self.Q  
+        Q_D = self.Q_D
+        
+        
 
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
@@ -188,13 +194,13 @@ class SDCSolver(SDCPreconditioners):
             #  assemble the part with u^{k+1}. We have to be very carefull as
             # v_m will be included in the function f.
             left = (
-                inner(u_m, v_m) - deltat * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
+                inner(u_m, v_m) - deltat * self.scale * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
             ) * dx  # f need to be composed with the change of variables
 
             # assemble part with u^{k}
             right = inner(u_0.subfunctions[m], v_m)
             for j in range(self.M):
-                coeff = Q_diff[m, j]
+                coeff = Q[m, j] - self.scale * Q_D[m, j] 
                 right += (
                     deltat
                     * coeff
@@ -233,7 +239,11 @@ class SDCSolver(SDCPreconditioners):
             "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/heatSDC/sol.pvd"
         )
         while t < T:
-            for _ in range(sweeps):
+            for k in range(1, sweeps + 1):
+                if self.prectype == "MIN-SR-FLEX":
+                    self.scale.assign(1.0 / k)
+                else:
+                    self.scale.assign(1.0)
                 self.u_k_prev.assign(self.u_k_act)
                 for s in self.solvers:
                     s.solve()
