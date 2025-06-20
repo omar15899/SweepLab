@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from FIAT.quadrature import GaussLobattoLegendreQuadratureLineRule
 from FIAT.reference_element import DefaultLine
+from firedrake import Constant
 
 
 @dataclass
@@ -43,6 +44,7 @@ class SDCPreconditioners:
         if self.prectype == 0:
             return np.diag(self.Q)
         elif self.prectype == "MIN-SR-NS":
-            return np.diag(np.diag([tau / self.M for tau in self.tau]))
+            n = Constant(1)
+            return np.diag(np.diag([tau / n for tau in self.tau]))
         else:
             raise Exception("there's no other preconditioners defined")

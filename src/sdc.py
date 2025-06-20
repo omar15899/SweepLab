@@ -22,6 +22,8 @@ class SDCSolver(SDCPreconditioners):
         is_paralell=True,
         solver_parameters=None,
         prectype: int | str = 0,
+        folder_name: str | None = None,
+        file_name: str | None = None,
     ):
         """
         Mesh : Predermined mesh
@@ -31,6 +33,7 @@ class SDCSolver(SDCPreconditioners):
             after integration by parts.
         V: Initial basis space
         bcs: python function calls object where its
+        prectype : MIN-SR-FLEX, MIN-SR-S, DIAG1, ...,
         """
         # Initialise preconditioner infrastructure
         super().__init__(M=M, prectype=prectype)
@@ -60,7 +63,9 @@ class SDCSolver(SDCPreconditioners):
         self.u_k_act = Function(self.W, name="u_{k+1}")
 
         # Instantiate the test functions, we cannot create a different TestFunction
-        # like I used to do before (v_m = TestFunction(self.V) within the loop)
+        # like I used to do before (v_m = TestFunction(self.V) within the loop).
+        ### I NEED TO SETUP SOMETHING ELSE FOR THE BOUNDARY CONDITIONS IN ORDER
+        ### TO INITIALISE IT IN A SIMPLER WAY.
         if is_paralell:
             # Use internal setting:
             self.bcs = bcs(self.V, Constant(0.0), "on_boundary")
@@ -97,8 +102,9 @@ class SDCSolver(SDCPreconditioners):
         Q_D = self.Q_D
         t0 = self.t_0_subinterval
         f = self.f
-        v = self.v
 
+        # We could use the mixed space but it's nonsense, as we don't have coupling
+        # among the different finite element subspaces.
         # We store the solvers
         self.solvers = []
 
@@ -136,41 +142,22 @@ class SDCSolver(SDCPreconditioners):
             # Define the functional for that specific node
             Rm = left - right
 
-            if self.linear:
-                problem_m = LinearVariationalProblem(Rm, u_m, bcs=self.bcs)
-                self.solvers.append(
-                    LinearVariationalSolver(
-                        problem_m,
-                        solver_parameters=(
-                            {
-                                "ksp_type": "",
-                                "pc_type": "",
-                                "pc_hypre_type": "",
-                                "ksp_rtol": 1e-8,
-                            }
-                            if not self.solver_parameters
-                            else self.solver_parameters
-                        ),
-                    )
+            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+            problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs)
+            self.solvers.append(
+                NonlinearVariationalSolver(
+                    problem_m,
+                    solver_parameters=(
+                        {
+                            "snes_type": "newtonls",
+                            "snes_rtol": 1e-8,
+                            "ksp_type": "cg",
+                        }
+                        if not self.solver_parameters
+                        else self.solver_parameters
+                    ),
                 )
-
-            else:
-                # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-                problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs)
-                self.solvers.append(
-                    NonlinearVariationalSolver(
-                        problem_m,
-                        solver_parameters=(
-                            {
-                                "snes_type": "newtonls",
-                                "snes_rtol": 1e-8,
-                                "ksp_type": "cg",
-                            }
-                            if not self.solver_parameters
-                            else self.solver_parameters
-                        ),
-                    )
-                )
+            )
 
     def _setup_general_solver(self):
         """
@@ -222,43 +209,22 @@ class SDCSolver(SDCPreconditioners):
             # Add to general residual functional
             Rm += left - right
 
-        if self.linear:
-            # problem_m = LinearVariationalProblem(Rm, u_k_act, bcs=self.bcs)
-            # self.solvers.append(
-            #     LinearVariationalSolver(
-            #         problem_m,
-            #         solver_parameters=(
-            #             {
-            #                 "ksp_type": "",
-            #                 "pc_type": "",
-            #                 "pc_hypre_type": "",
-            #                 "ksp_rtol": 1e-8,
-            #             }
-            #             if not self.solver_parameters
-            #             else self.solver_parameters
-            #         ),
-            #     )
-            # )
-            pass
-
-        else:
-            print(type(u_k_act))
-            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(Rm, u_k_act, bcs=self.bcs)
-            self.solvers.append(
-                NonlinearVariationalSolver(
-                    problem_m,
-                    solver_parameters=(
-                        {
-                            "snes_type": "newtonls",
-                            "snes_rtol": 1e-8,
-                            "ksp_type": "cg",
-                        }
-                        if not self.solver_parameters
-                        else self.solver_parameters
-                    ),
-                )
+        # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+        problem_m = NonlinearVariationalProblem(Rm, u_k_act, bcs=self.bcs)
+        self.solvers.append(
+            NonlinearVariationalSolver(
+                problem_m,
+                solver_parameters=(
+                    {
+                        "snes_type": "newtonls",
+                        "snes_rtol": 1e-8,
+                        "ksp_type": "cg",
+                    }
+                    if not self.solver_parameters
+                    else self.solver_parameters
+                ),
             )
+        )
 
     def solve(self, T, sweeps):
         t = 0.0
