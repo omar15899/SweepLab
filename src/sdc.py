@@ -98,8 +98,8 @@ class SDCSolver(SDCPreconditioners):
         """
         deltat = self.deltat
         tau = self.tau
-        Q = self.Q
         Q_D = self.Q_D
+        Q_diff = self.Q_diff
         t0 = self.t_0_subinterval
         f = self.f
 
@@ -121,13 +121,13 @@ class SDCSolver(SDCPreconditioners):
             #  assemble the part with u^{k+1}. We have to be very carefull as
             # v_m will be included in the function f.
             left = (
-                inner(u_m, v_m) - deltat * Q_D[m] * f(t0 + tau[m] * deltat, u_m, v_m)
+                inner(u_m, v_m) - deltat * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
             ) * dx  # f need to be composed with the change of variables
 
             # assemble part with u^{k}
             right = inner(self.u_0.subfunctions[0], v_m)
             for j in range(self.M):
-                coeff = Q[m, j] - (Q_D[m] if j == m else 0.0)
+                coeff = Q_diff[m, j]
                 right += (
                     deltat
                     * coeff
@@ -166,8 +166,8 @@ class SDCSolver(SDCPreconditioners):
 
         deltat = self.deltat
         tau = self.tau
-        Q = self.Q
         Q_D = self.Q_D
+        Q_diff = self.Q_diff
         t0 = self.t_0_subinterval
         u_0 = self.u_0
         u_k_prev = self.u_k_prev
@@ -188,13 +188,13 @@ class SDCSolver(SDCPreconditioners):
             #  assemble the part with u^{k+1}. We have to be very carefull as
             # v_m will be included in the function f.
             left = (
-                inner(u_m, v_m) - deltat * Q_D[m] * f(t0 + tau[m] * deltat, u_m, v_m)
+                inner(u_m, v_m) - deltat * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
             ) * dx  # f need to be composed with the change of variables
 
             # assemble part with u^{k}
             right = inner(u_0.subfunctions[m], v_m)
             for j in range(self.M):
-                coeff = Q[m, j] - (Q_D[m] if j == m else 0.0)
+                coeff = Q_diff[m, j]
                 right += (
                     deltat
                     * coeff

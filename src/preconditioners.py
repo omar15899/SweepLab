@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import numpy as np
 from FIAT.quadrature import GaussLobattoLegendreQuadratureLineRule
 from FIAT.reference_element import DefaultLine
-from firedrake import Constant
 
 
 @dataclass
@@ -21,6 +20,7 @@ class SDCPreconditioners:
         # INstantiate the collocation matrix and the Q_Delta
         self.Q = self._buildQ()
         self.Q_D = self._Q_Delta()
+        self.Q_diff = self.Q - self.Q_D
 
     def _buildQ(self):
         tau = self.tau
@@ -42,9 +42,14 @@ class SDCPreconditioners:
     # We will include all preconditioners here Q_delta. (MIN-RES)
     def _Q_Delta(self):
         if self.prectype == 0:
-            return np.diag(self.Q)
-        elif self.prectype == "MIN-SR-NS":
-            n = Constant(1)
-            return np.diag(np.diag([tau / n for tau in self.tau]))
+            return np.diag(np.diag(self.Q))
+        elif self.prectype == "MIN-SR-FLEX":
+            n = 1
+            return np.diag(self.tau)
         else:
             raise Exception("there's no other preconditioners defined")
+
+
+a = SDCPreconditioners(4, 0)
+print(a.Q_D)
+print(a.Q)

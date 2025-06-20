@@ -1,3 +1,5 @@
 *.pvd
 .DS_Store
+*.pyc
+tests/
 heatSDC/
