@@ -57,8 +57,7 @@ class SDCSolver(SDCPreconditioners):
         self.file_name = os.path.splitext(file_name)
         self.folder_name = folder_name if folder_name else "solution"
         self.path_name = path_name if path_name else os.getcwd()
-        self.extension = ".h5" if is_checkpoint else ".pvd"
-        self.file = self._file_name()
+        self.file = self._create_unique_path()
 
         self.is_vtk = is_vtk
         self.is_checkpoint = is_checkpoint
@@ -118,12 +117,15 @@ class SDCSolver(SDCPreconditioners):
             else self._setup_paralell_solver_global()
         )
 
-    def _file_name(self):
+    def _create_unique_path(self):
         """
         Create correct folder organisation.
         if vtk, we store the solution in different folders
         if chekcpoint, we store the solution in only one folder
         """
+        base_name, _ = self.file_name
+        base_dir = os.path.join(self.path_name, self.folder_name)
+        os.makedirs(base_dir, exist_ok=True)
         if self.is_checkpoint:
             # files with no extension
             all_files = {
@@ -134,10 +136,12 @@ class SDCSolver(SDCPreconditioners):
             # If the file is a checkpoint, we enumerate the files
             i = 0
             while True:
-                file_name = f"self.file_name_{i}"
+                file_name = f"{base_name}_{i}"
                 if file_name not in all_files:
                     break
                 i += 1
+
+            return os.path.join(base_dir, file_name + ".h5")
 
         else:
             all_folders = {
@@ -153,9 +157,7 @@ class SDCSolver(SDCPreconditioners):
                     break
                 i += 1
 
-        return os.path.joint(
-            self.path_name, self.folder_name, file_name, self.extension
-        )
+            return os.path.join(self.path_name, folder_name, base_name + ".pvd")
 
     def _solver_ensambler(self):
         pass
