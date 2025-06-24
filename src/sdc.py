@@ -299,33 +299,52 @@ class SDCSolver(SDCPreconditioners):
         )
 
     def solve(self, T, sweeps):
-        t = 0.0
-        step = 0
+        t, step = 0.0, 0
 
-        output = VTKFile(
-            "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/heatSDC/sol.pvd"
-        )
-        while t < T:
-            for k in range(1, sweeps + 1):
-                if self.prectype == "MIN-SR-FLEX":
-                    self.scale.assign(1.0 / k)
-                else:
-                    self.scale.assign(1.0)
-                self.u_k_prev.assign(self.u_k_act)
-                for s in self.solvers:
-                    s.solve()
+        if self.is_checkpoint:
+            with CheckpointFile(self.file, "w") as ck:
+                while t < T:
+                    for k in range(1, sweeps + 1):
+                        if self.prectype == "MIN-SR-FLEX":
+                            self.scale.assign(1.0 / k)
+                        else:
+                            self.scale.assign(1.0)
+                        self.u_k_prev.assign(self.u_k_act)
+                        for s in self.solvers:
+                            s.solve()
+                    ck.save_function(self.u_k_act.subfunctions[-1], idx=step)
+                    last = self.u_k_act.subfunctions[-1]
+                    for sub in (
+                        *self.u_k_act.subfunctions,
+                        *self.u_k_prev.subfunctions,
+                        *self.u_0.subfunctions,
+                    ):
+                        sub.assign(last)
+                    t += self.deltat
+                    self.t_0_subinterval.assign(t)
+                    step += 1
+                    print(f"step: {step}, time = {t}")
 
-            output.write(self.u_k_act.subfunctions[-1], time=t)
-            # once all the sweeps are done, we upload with tau = 1 for the next subinterval.
-            last = self.u_k_act.subfunctions[-1]
-            for subfunction in self.u_k_act.subfunctions:
-                subfunction.assign(last)
-            for subfunction in self.u_k_prev.subfunctions:
-                subfunction.assign(last)
-            for subfunction in self.u_0.subfunctions:
-                subfunction.assign(last)
-
-            t += self.deltat
-            self.t_0_subinterval.assign(t)
-            step += 1
-            print(f"step : {step},  time = {t}")
+        else:
+            vtk = VTKFile(self.file)
+            while t < T:
+                for k in range(1, sweeps + 1):
+                    if self.prectype == "MIN-SR-FLEX":
+                        self.scale.assign(1.0 / k)
+                    else:
+                        self.scale.assign(1.0)
+                    self.u_k_prev.assign(self.u_k_act)
+                    for s in self.solvers:
+                        s.solve()
+                vtk.write(self.u_k_act.subfunctions[-1], time=t)
+                last = self.u_k_act.subfunctions[-1]
+                for sub in (
+                    *self.u_k_act.subfunctions,
+                    *self.u_k_prev.subfunctions,
+                    *self.u_0.subfunctions,
+                ):
+                    sub.assign(last)
+                t += self.deltat
+                self.t_0_subinterval.assign(t)
+                step += 1
+                print(f"step: {step}, time = {t}")
