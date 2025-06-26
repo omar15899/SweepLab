@@ -1,3 +1,4 @@
+from typing import Iterable
 import os
 import numpy as np
 from firedrake import *
@@ -16,7 +17,7 @@ class SDCSolver(SDCPreconditioners):
         V,
         f,
         u0,
-        bcs,
+        boundary_conditions: Iterable[callable] | callable,
         M=4,
         N=1,
         dt=1e-3,
@@ -40,6 +41,7 @@ class SDCSolver(SDCPreconditioners):
         V: Initial basis space
         bcs: python function calls object where its
         prectype : MIN-SR-FLEX, MIN-SR-S, DIAG1, ...,
+        tau: personalised nodes
         """
         # Initialise preconditioner infrastructure
         super().__init__(M=M, prectype=prectype, tau=tau)
@@ -47,20 +49,20 @@ class SDCSolver(SDCPreconditioners):
         self.mesh = mesh
         self.V = V
         self.deltat = dt
-        self.bcs = bcs
+        self.boundary_conditions = boundary_conditions
         self.f = f
         self.linear = is_linear
         self.solver_parameters = solver_parameters
         self.N = N
+
+        self.is_vtk = is_vtk
+        self.is_checkpoint = is_checkpoint if not is_vtk else False
 
         # File saving attributes
         self.file_name = os.path.splitext(file_name)
         self.folder_name = folder_name if folder_name else "solution"
         self.path_name = path_name if path_name else os.getcwd()
         self.file = self._create_unique_path()
-
-        self.is_vtk = is_vtk
-        self.is_checkpoint = is_checkpoint
 
         if (self.is_vtk and self.is_checkpoint) or (
             (not self.is_vtk) and (not self.is_checkpoint)
@@ -79,25 +81,14 @@ class SDCSolver(SDCPreconditioners):
         # for each node M defined
         self.W = MixedFunctionSpace([self.V] * self.M)
 
+        # Instantiate boundary conditions and test functions:
+        self.bcs, self.v = self._define_boundary_setup()
+
         # Define the actual functions, if we want to retrieve
         # the list of functions for each coordinate use split.
         self.u_0 = Function(self.W, name="u_0")
         self.u_k_prev = Function(self.W, name="u_k")
         self.u_k_act = Function(self.W, name="u_{k+1}")
-
-        # Instantiate the test functions, we cannot create a different TestFunction
-        # like I used to do before (v_m = TestFunction(self.V) within the loop).
-        ### I NEED TO SETUP SOMETHING ELSE FOR THE BOUNDARY CONDITIONS IN ORDER
-        ### TO INITIALISE IT IN A SIMPLER WAY.
-        if is_local:
-            # Use internal setting:
-            self.bcs = bcs(self.V, Constant(0.2), "on_boundary")
-            self.v = None
-        else:
-            self.bcs = [
-                bcs(self.W.sub(i), Constant(0.2), "on_boundary") for i in range(self.M)
-            ]
-            self.v = TestFunctions(self.W)
 
         # As all the functions are vectorial in the codomain due
         # to the nodal discretisation of the temporal axis
@@ -116,6 +107,42 @@ class SDCSolver(SDCPreconditioners):
             if is_local
             else self._setup_paralell_solver_global()
         )
+
+    def _define_boundary_setup(self):
+        """
+        4 cases:
+        -- Is_local with just one pde
+        -- Is_local but we have a system of pde's (apart from the system that it's created in the nodes)
+        -- Not Is_local with just one pde, in this case we have a mixed space in the time nodes
+        -- Not is_local, with a system of pde's, we have a mixed space in the time nodes and for the different
+        PDE's that might also be coupled, so we want that each basis to treat it coupled also.
+
+        ---> Returns: boundary conditions and test functions
+        """
+
+        if self.is_local and not isinstance(self.boundary_conditions, Iterable):
+            return (self.boundary_conditions, None)
+        elif self.is_local and isinstance(self.boundary_conditions, Iterable):
+            pass  # For system of PDEs
+        elif (not self.is_local) and (
+            not isinstance(self.boundary_conditions, Iterable)
+        ):
+            return (None, TestFunctions(self.W))
+        elif (not self.is_local) and isinstance(self.boundary_conditions, Iterable):
+            pass
+
+        # if is_local:
+        #     # Use internal setting:
+        #     self.boundary_conditions = boundary_conditions(
+        #         self.V, Constant(0.2), "on_boundary"
+        #     )
+        #     self.v = None
+        # else:
+        #     self.boundary_conditions = [
+        #         boundary_conditions(self.W.sub(i), Constant(0.2), "on_boundary")
+        #         for i in range(self.M)
+        #     ]
+        #     self.v = TestFunctions(self.W)
 
     def _create_unique_path(self):
         """
@@ -213,7 +240,9 @@ class SDCSolver(SDCPreconditioners):
             Rm = left - right
 
             # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs)
+            problem_m = NonlinearVariationalProblem(
+                Rm, u_m, bcs=self.boundary_conditions
+            )
             self.solvers.append(
                 NonlinearVariationalSolver(
                     problem_m,
@@ -282,7 +311,9 @@ class SDCSolver(SDCPreconditioners):
             Rm += left - right
 
         # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-        problem_m = NonlinearVariationalProblem(Rm, u_k_act, bcs=self.bcs)
+        problem_m = NonlinearVariationalProblem(
+            Rm, u_k_act, bcs=self.boundary_conditions
+        )
         self.solvers.append(
             NonlinearVariationalSolver(
                 problem_m,
@@ -302,7 +333,9 @@ class SDCSolver(SDCPreconditioners):
         t, step = 0.0, 0
 
         if self.is_checkpoint:
-            with CheckpointFile(self.file, "w") as ck:
+            with CheckpointFile(self.file, "w") as afile:
+                # Save the mesh
+                afile.save_mesh(self.mesh)
                 while t < T:
                     for k in range(1, sweeps + 1):
                         if self.prectype == "MIN-SR-FLEX":
@@ -312,7 +345,7 @@ class SDCSolver(SDCPreconditioners):
                         self.u_k_prev.assign(self.u_k_act)
                         for s in self.solvers:
                             s.solve()
-                    ck.save_function(self.u_k_act.subfunctions[-1], idx=step)
+                    afile.save_function(self.u_k_act.subfunctions[-1], idx=step)
                     last = self.u_k_act.subfunctions[-1]
                     for sub in (
                         *self.u_k_act.subfunctions,
