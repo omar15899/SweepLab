@@ -1,8 +1,8 @@
 from firedrake import *
 from src.sdc import SDCSolver
 
-Tfinal = 4.0
-dt = 1e-2
+Tfinal = 0.5
+dt = 1e-4
 M = 4
 nsweeps = 3
 
@@ -35,11 +35,15 @@ solver = SDCSolver(
     V,
     f=f1,
     u0=u0_expr,
-    bcs=bcs,
+    boundary_conditions=bcs,
     M=M,
     dt=dt,
-    is_paralell=True,
+    is_local=True,
     prectype="MIN-SR-FLEX",
+    file_name="heat_equation_sdc",
+    folder_name="HE",
+    path_name="/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/heatSDC",
+    is_vtk=True,
 )
 
 uT = solver.solve(T=Tfinal, sweeps=nsweeps)
