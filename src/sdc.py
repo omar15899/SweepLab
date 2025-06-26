@@ -13,24 +13,23 @@ class SDCSolver(SDCPreconditioners):
 
     def __init__(
         self,
-        mesh,
-        V,
-        f,
-        u0,
-        boundary_conditions: Iterable[callable] | callable,
+        mesh: Mesh,
+        V: FunctionSpace | Iterable[FunctionSpace],
+        f: Function | Iterable[Function],
+        u0: Function | Iterable[Function],
+        boundary_conditions: callable | Iterable[callable],
         M=4,
         N=1,
         dt=1e-3,
         is_linear=False,
         is_local=True,
-        solver_parameters=None,
+        solver_parameters: dict | None = None,
         prectype: int | str = 0,
         tau: np.ndarray | None = None,
         file_name: str = "solution",
         folder_name: str | None = None,
         path_name: str | None = None,
         is_vtk: bool = False,
-        is_checkpoint: bool = True,
     ):
         """
         Mesh : Predermined mesh
@@ -42,6 +41,10 @@ class SDCSolver(SDCPreconditioners):
         bcs: python function calls object where its
         prectype : MIN-SR-FLEX, MIN-SR-S, DIAG1, ...,
         tau: personalised nodes
+
+        -----
+        All the iterables are ment to solve systems of equations. Also a
+
         """
         # Initialise preconditioner infrastructure
         super().__init__(M=M, prectype=prectype, tau=tau)
@@ -56,7 +59,7 @@ class SDCSolver(SDCPreconditioners):
         self.N = N
 
         self.is_vtk = is_vtk
-        self.is_checkpoint = is_checkpoint if not is_vtk else False
+        self.is_checkpoint = True if not is_vtk else False
 
         # File saving attributes
         self.file_name = os.path.splitext(file_name)
