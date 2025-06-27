@@ -1,12 +1,12 @@
 from typing import Iterable
-import os
 import numpy as np
 from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
+from .filenamer import FileNamer
 
 
-class SDCSolver(SDCPreconditioners):
+class SDCSolver(SDCPreconditioners, FileNamer):
     """
     Specific solver for SDC
     """
@@ -43,9 +43,20 @@ class SDCSolver(SDCPreconditioners):
         tau: personalised nodes
 
         -----
-        All the iterables are ment to solve systems of equations. Also a
+        All the iterables are ment to solve systems of equations.
+
+        From what I heard we can combine and nest different function spaces
+        over the same mesh and they will be flattened. Also we can mix
+        MixedFunctionSpace with VectorFunctionSpace
 
         """
+        # Initialise FileNamer
+        super().__init__(
+            file_name=file_name,
+            folder_name=folder_name,
+            path_name=path_name,
+            is_vtk=is_vtk,
+        )
         # Initialise preconditioner infrastructure
         super().__init__(M=M, prectype=prectype, tau=tau)
 
@@ -57,22 +68,6 @@ class SDCSolver(SDCPreconditioners):
         self.linear = is_linear
         self.solver_parameters = solver_parameters
         self.N = N
-
-        self.is_vtk = is_vtk
-        self.is_checkpoint = True if not is_vtk else False
-
-        # File saving attributes
-        self.file_name = os.path.splitext(file_name)
-        self.folder_name = folder_name if folder_name else "solution"
-        self.path_name = path_name if path_name else os.getcwd()
-        self.file = self._create_unique_path()
-
-        if (self.is_vtk and self.is_checkpoint) or (
-            (not self.is_vtk) and (not self.is_checkpoint)
-        ):
-            raise ValueError(
-                "You cannot use both VTK and checkpoint saving at the same time or neither of them."
-            )
 
         # Parametrise the mesh, this is crutial for defining f.
         self.x = SpatialCoordinate(self.mesh)  # x[0] = x, x[1] = y, x[n]= ...
@@ -146,48 +141,6 @@ class SDCSolver(SDCPreconditioners):
         #         for i in range(self.M)
         #     ]
         #     self.v = TestFunctions(self.W)
-
-    def _create_unique_path(self):
-        """
-        Create correct folder organisation.
-        if vtk, we store the solution in different folders
-        if chekcpoint, we store the solution in only one folder
-        """
-        base_name, _ = self.file_name
-        base_dir = os.path.join(self.path_name, self.folder_name)
-        os.makedirs(base_dir, exist_ok=True)
-        if self.is_checkpoint:
-            # files with no extension
-            all_files = {
-                os.path.splitext(name)[0]
-                for name in os.listdir(os.path.join(self.path_name, self.folder_name))
-            }
-
-            # If the file is a checkpoint, we enumerate the files
-            i = 0
-            while True:
-                file_name = f"{base_name}_{i}"
-                if file_name not in all_files:
-                    break
-                i += 1
-
-            return os.path.join(base_dir, file_name + ".h5")
-
-        else:
-            all_folders = {
-                name
-                for name in os.listdir(self.path_name)
-                if os.path.isdir(self.path_name)
-            }
-
-            i = 0
-            while True:
-                folder_name = f"{self.folder_name}_{i}"
-                if folder_name not in all_folders:
-                    break
-                i += 1
-
-            return os.path.join(self.path_name, folder_name, base_name + ".pvd")
 
     def _solver_ensambler(self):
         pass
