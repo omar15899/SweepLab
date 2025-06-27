@@ -6,7 +6,7 @@ from .preconditioners import SDCPreconditioners
 from .filenamer import FileNamer
 
 
-class SDCSolver(SDCPreconditioners, FileNamer):
+class SDCSolver(FileNamer, SDCPreconditioners):
     """
     Specific solver for SDC
     """
@@ -51,20 +51,27 @@ class SDCSolver(SDCPreconditioners, FileNamer):
 
         """
         # Initialise FileNamer
-        super().__init__(
+        FileNamer.__init__(
+            self,
             file_name=file_name,
             folder_name=folder_name,
             path_name=path_name,
             is_vtk=is_vtk,
         )
         # Initialise preconditioner infrastructure
-        super().__init__(M=M, prectype=prectype, tau=tau)
+        SDCPreconditioners.__init__(
+            self,
+            M=M,
+            prectype=prectype,
+            tau=tau,
+        )
 
         self.mesh = mesh
         self.V = V
         self.deltat = dt
         self.boundary_conditions = boundary_conditions
         self.f = f
+        self.is_local = is_local
         self.linear = is_linear
         self.solver_parameters = solver_parameters
         self.N = N
