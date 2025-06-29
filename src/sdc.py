@@ -18,6 +18,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         f: Function | Iterable[Function],
         u0: Function | Iterable[Function],
         boundary_conditions: callable | Iterable[callable],
+        time_dependent_constants_bts: Constant | Iterable[Constant] | None = None,
         M=4,
         N=1,
         dt=1e-3,
@@ -70,6 +71,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.V = V
         self.deltat = dt
         self.boundary_conditions = boundary_conditions
+        self.time_dependent_constants_bts = time_dependent_constants_bts
         self.f = f
         self.is_local = is_local
         self.linear = is_linear
@@ -318,6 +320,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         sub.assign(last)
                     t += self.deltat
                     self.t_0_subinterval.assign(t)
+                    if self.time_dependent_constants_bts:
+                        for ct in self.time_dependent_constants_bts:
+                            ct.assign(t)
                     step += 1
                     print(f"step: {step}, time = {t}")
 
@@ -342,5 +347,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     sub.assign(last)
                 t += self.deltat
                 self.t_0_subinterval.assign(t)
+                if self.time_dependent_constants_bts:
+                    for ct in self.time_dependent_constants_bts:
+                        ct.assign(t)
                 step += 1
                 print(f"step: {step}, time = {t}")
