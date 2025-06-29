@@ -4,6 +4,7 @@ from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
 from .filenamer import FileNamer
+from .specs import PDEobj
 
 
 class SDCSolver(FileNamer, SDCPreconditioners):
@@ -14,16 +15,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
     def __init__(
         self,
         mesh: Mesh,
-        V: FunctionSpace | Iterable[FunctionSpace],
-        f: Function | Iterable[Function],
-        u0: Function | Iterable[Function],
-        boundary_conditions: callable | Iterable[callable],
-        time_dependent_constants_bts: Constant | Iterable[Constant] | None = None,
-        M=4,
-        N=1,
-        dt=1e-3,
-        is_linear=False,
-        is_local=True,
+        PDEobjects: PDEobj | Iterable[PDEobj],
+        M: int = 4,
+        N: int = 1,
+        dt: int | float = 1e-3,
+        is_linear: bool = False,
+        is_local: bool = True,
         solver_parameters: dict | None = None,
         prectype: int | str = 0,
         tau: np.ndarray | None = None,
@@ -68,18 +65,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         )
 
         self.mesh = mesh
-        self.V = V
+        self.PDEs = list(PDEobjects)
         self.deltat = dt
-        self.boundary_conditions = boundary_conditions
-        self.time_dependent_constants_bts = time_dependent_constants_bts
-        self.f = f
         self.is_local = is_local
         self.linear = is_linear
         self.solver_parameters = solver_parameters
         self.N = N
 
-        # Parametrise the mesh, this is crutial for defining f.
-        self.x = SpatialCoordinate(self.mesh)  # x[0] = x, x[1] = y, x[n]= ...
+        # Dealing with the whole system of pdes
+        # Create the mixed Function space of all of them
+        self.V = MixedFunctionSpace([pde.V for pde in self.PDEs])
 
         # In order to match spatial and temporal discretisation,
         # we create a MixedFunctionSpace in order to have a bag
@@ -87,6 +82,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # a function in this space we are creating M functions, one
         # for each node M defined
         self.W = MixedFunctionSpace([self.V] * self.M)
+        # Also we could use the * operator to create the MixedFunctionSpace
 
         # Instantiate boundary conditions and test functions:
         self.bcs, self.v = self._define_boundary_setup()
