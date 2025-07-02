@@ -4,7 +4,7 @@ from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
 from .filenamer import FileNamer
-from .specs import PDESystem, SDCfunctions
+from .specs import PDESystem
 
 
 class SDCSolver(FileNamer, SDCPreconditioners):

@@ -3,55 +3,6 @@ from firedrake import *
 
 
 @dataclass
-class SDCfunctions:
-    @staticmethod
-    def _path_from_space(space):
-        """
-        returns de _indices attribute of the bcs, but as is an internal parameter
-        im a little bit scared of using it.
-        """
-        path = []
-        while getattr(space, "index", None) is not None:
-            path.insert(0, space.index)
-            space = space.parent
-        return path
-
-    @staticmethod
-    def _follow_path(root, path):
-        """We retrieve the actual subspace we want to be working with"""
-        for i in path:
-            root = root.sub(i)
-        return root
-
-    @staticmethod
-    def _define_node_time_boundary_setup(bcs_original, W, M):
-
-        if not bcs_original:
-            return []
-
-        bcs = []
-
-        bcs = []
-        # We go over all the copies of the mixed space wrt the temporal nodes
-        for m in range(M):
-            # Now we characterise that specific brunch
-            V_m = W.sub(m)
-            # Test with functions belong to this space
-            for bc in bcs_original:
-                path = PDESystem._path_from_space(bc.function_space())
-                tgt_space = PDESystem._follow_path(V_m, path)
-                if isinstance(bc, DirichletBC):
-                    bcs.append(bc.reconstruct(V=tgt_space, indices=[]))
-
-                elif isinstance(bc, EquationBC):
-                    pass
-                else:
-                    raise TypeError(f"Not supported boundary type {type(bc)}")
-
-        return bcs
-
-
-@dataclass
 class PDESystem(object):
     """
     V must be the definitive space for that PDE conforming the system.
