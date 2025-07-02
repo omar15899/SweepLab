@@ -133,7 +133,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             return []
 
         if self.is_local:
-            # Asegúrate de devolver una tupla, como espera Firedrake
             return tuple(self.PDEs.boundary_conditions)
 
         bcs = []
@@ -168,11 +167,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             else:
                 raise Exception("your bc is not accepted.")
 
-        return bcs
+        return tuple(bcs)
 
     def _setup_paralell_solver_local(self):
         """
-        Compute the solvers
+        Compute the solvers:
+
+        Needs to work for:
+
         """
         deltat = self.deltat
         tau = self.tau
