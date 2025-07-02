@@ -75,6 +75,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # Dealing with the whole system of pdes
         # Create the mixed Function space of all of them
         self.V = self.PDEs.V
+        self.lenV = len(self.V.subspaces) if self._is_Mixed else 1
 
         # In order to match spatial and temporal discretisation,
         # we create a MixedFunctionSpace in order to have a bag
@@ -82,11 +83,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # a function in this space we are creating M functions, one
         # for each node M defined
         self.W = MixedFunctionSpace([self.V] * self.M)
-        # Also we could use the * operator to create the MixedFunctionSpace
+        # Also we could use the * operator to create the MixedFunctionSpace,
+        # self.W is a flat list of subspaces, theres no nested subspaces
+        # except for the vectorfunctionspaces. self.V is flattened before
+        # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.bcs = SDCfunctions._define_node_time_boundary_setup(
-            PDESystem.boundary_conditions, self.W, self.M
+        self.bcs = self._define_node_time_boundary_setup(
+            self.PDEs.boundary_conditions, self.W, self.M
         )
 
         # Define the actual functions, if we want to retrieve
@@ -97,9 +101,15 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         # As all the functions are vectorial in the codomain due
         # to the nodal discretisation of the temporal axis
-        for subfunction_0, subfunction_k_prev, subfunction_k_act in zip(
-            self.u_0.subfunctions, self.u_k_prev.subfunctions, self.u_k_act.subfunctions
+        for i, (subfunction_0, subfunction_k_prev, subfunction_k_act) in enumerate(
+            zip(
+                self.u_0.subfunctions,
+                self.u_k_prev.subfunctions,
+                self.u_k_act.subfunctions,
+            ),
+            0,
         ):
+            u0 = self.PDEs.u0.subfunctions[i % self.lenV]
             subfunction_0.interpolate(u0)
             subfunction_k_prev.interpolate(u0)
             subfunction_k_act.interpolate(u0)
@@ -112,6 +122,47 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             if is_local
             else self._setup_paralell_solver_global()
         )
+
+    def _define_node_time_boundary_setup(self):
+        """
+        Need to be very awayre of how Firedrake flattens
+        MixedFunctionSpace, we have a lot of tests in
+        boundary_conditions.py. Also have a look to my notes
+        in Notability.
+        """
+
+        if not self.PDEs.boundary_conditions:
+            return []
+
+        bcs = []
+        for bc in self.PDEs.boundary_conditions:
+            if isinstance(bc, DirichletBC):
+                idx = bc.function_space_index()
+                bc_function_space = (
+                    bc.function_space()
+                )  # it gives us the subsubspace in which vs is defined.
+                component = getattr(bc_function_space, "component", None)
+                # is_function_space = isinstance(self.V.sub(idx), FunctionSpace)
+
+                for n in range(self.N):
+                    subspace = self.W.sub(idx + n * self.lenV)
+                    # As Firedrake flattens the MixedFunctionSpace,
+                    # we cannot have another MixedFunctionSpace nested!
+                    bcs.append(
+                        bc.reconstruct(
+                            V=(
+                                subspace
+                                if component is None
+                                else subspace.sub(component)
+                            )
+                        )
+                    )
+            elif isinstance(bc, EquationBC):
+                pass
+            else:
+                raise Exception("your bc is not accepted.")
+
+        return bcs
 
     def _solver_ensambler(self):
         pass

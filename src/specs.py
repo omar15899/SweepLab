@@ -30,6 +30,8 @@ class SDCfunctions:
             return []
 
         bcs = []
+
+        bcs = []
         # We go over all the copies of the mixed space wrt the temporal nodes
         for m in range(M):
             # Now we characterise that specific brunch
@@ -111,8 +113,7 @@ class PDESystem(object):
     name: str | None
 
     def __post_init__(self):
-        # Create mixed function space. LO TENEMOS QUE METER NOSOTROS DE ANTES.
-
+        self._is_Mixed = isinstance(self.V, MixedFunctionSpace)
         # Define boundary conditions in an homogenieus way (always a list)
         self.bcs = (
             (self.boundary_conditions,)
