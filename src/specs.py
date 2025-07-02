@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from firedrake import *
+from typing import Union
 
 
 @dataclass
@@ -55,16 +56,16 @@ class PDESystem(object):
     """
 
     mesh: Mesh
-    V: FunctionSpace | VectorFunctionSpace | MixedFunctionSpace
+    V: Union[FunctionSpace, VectorFunctionSpace, MixedFunctionSpace]
     coord: SpatialCoordinate
     f: Function
     u0: Function  # (if system is mixed, use Function(V) withc .subfunctions[] already specified)
     boundary_conditions: tuple[DirichletBC | EquationBC]
     time_dependent_constants_bts: Constant | tuple[Constant] | None = None
-    name: str | None
+    name: str | None = None
 
     def __post_init__(self):
-        self._is_Mixed = isinstance(self.V, MixedFunctionSpace)
+        self._is_Mixed = len(self.V.subspaces) > 1
         # Define boundary conditions in an homogenieus way (always a list)
         self.bcs = (
             (self.boundary_conditions,)

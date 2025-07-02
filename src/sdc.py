@@ -75,7 +75,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # Dealing with the whole system of pdes
         # Create the mixed Function space of all of them
         self.V = self.PDEs.V
-        self.lenV = len(self.V.subspaces) if self._is_Mixed else 1
+        self.lenV = len(self.V.subspaces) if self.PDEs._is_Mixed else 1
 
         # In order to match spatial and temporal discretisation,
         # we create a MixedFunctionSpace in order to have a bag
@@ -89,9 +89,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.bcs = self._define_node_time_boundary_setup(
-            self.PDEs.boundary_conditions, self.W, self.M
-        )
+        self.bcs = self._define_node_time_boundary_setup()
 
         # Define the actual functions, if we want to retrieve
         # the list of functions for each coordinate use split.
@@ -134,13 +132,21 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         if not self.PDEs.boundary_conditions:
             return []
 
+        if self.is_local:
+            # Asegúrate de devolver una tupla, como espera Firedrake
+            return tuple(self.PDEs.boundary_conditions)
+
         bcs = []
         for bc in self.PDEs.boundary_conditions:
             if isinstance(bc, DirichletBC):
-                idx = bc.function_space_index()
                 bc_function_space = (
                     bc.function_space()
                 )  # it gives us the subsubspace in which vs is defined.
+                idx = (
+                    bc_function_space.index
+                    if bc_function_space.index is not None
+                    else 0
+                )
                 component = getattr(bc_function_space, "component", None)
                 # is_function_space = isinstance(self.V.sub(idx), FunctionSpace)
 
@@ -164,9 +170,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         return bcs
 
-    def _solver_ensambler(self):
-        pass
-
     def _setup_paralell_solver_local(self):
         """
         Compute the solvers
@@ -174,7 +177,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         deltat = self.deltat
         tau = self.tau
         t0 = self.t_0_subinterval
-        f = self.f
+        f = self.PDEs.f
         Q = self.Q
         Q_D = self.Q_D
         # We could use the mixed space but it's nonsense, as we don't have coupling
@@ -218,9 +221,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             Rm = left - right
 
             # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(
-                Rm, u_m, bcs=self.boundary_conditions
-            )
+            problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs)
             self.solvers.append(
                 NonlinearVariationalSolver(
                     problem_m,
@@ -333,8 +334,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         sub.assign(last)
                     t += self.deltat
                     self.t_0_subinterval.assign(t)
-                    if self.time_dependent_constants_bts:
-                        for ct in self.time_dependent_constants_bts:
+                    if self.PDEs.time_dependent_constants_bts:
+                        for ct in self.PDEs.time_dependent_constants_bts:
                             ct.assign(t)
                     step += 1
                     print(f"step: {step}, time = {t}")
@@ -360,8 +361,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     sub.assign(last)
                 t += self.deltat
                 self.t_0_subinterval.assign(t)
-                if self.time_dependent_constants_bts:
-                    for ct in self.time_dependent_constants_bts:
+                if self.PDEs.time_dependent_constants_bts:
+                    for ct in self.PDEs.time_dependent_constants_bts:
                         ct.assign(t)
                 step += 1
                 print(f"step: {step}, time = {t}")
