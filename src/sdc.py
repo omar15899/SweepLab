@@ -4,7 +4,7 @@ from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
 from .filenamer import FileNamer
-from .specs import PDEobj
+from .specs import PDESystem, SDCfunctions
 
 
 class SDCSolver(FileNamer, SDCPreconditioners):
@@ -15,7 +15,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
     def __init__(
         self,
         mesh: Mesh,
-        PDEobjects: PDEobj | Iterable[PDEobj],
+        PDEs: PDESystem,
         M: int = 4,
         N: int = 1,
         dt: int | float = 1e-3,
@@ -65,7 +65,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         )
 
         self.mesh = mesh
-        self.PDEs = list(PDEobjects)
+        self.PDEs = PDEs
         self.deltat = dt
         self.is_local = is_local
         self.linear = is_linear
@@ -74,7 +74,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         # Dealing with the whole system of pdes
         # Create the mixed Function space of all of them
-        self.V = MixedFunctionSpace([pde.V for pde in self.PDEs])
+        self.V = self.PDEs.V
 
         # In order to match spatial and temporal discretisation,
         # we create a MixedFunctionSpace in order to have a bag
@@ -85,7 +85,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # Also we could use the * operator to create the MixedFunctionSpace
 
         # Instantiate boundary conditions and test functions:
-        self.bcs, self.v = self._define_boundary_setup()
+        self.bcs = SDCfunctions._define_node_time_boundary_setup(
+            PDESystem.boundary_conditions, self.W, self.M
+        )
 
         # Define the actual functions, if we want to retrieve
         # the list of functions for each coordinate use split.
@@ -110,42 +112,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             if is_local
             else self._setup_paralell_solver_global()
         )
-
-    def _define_boundary_setup(self):
-        """
-        4 cases:
-        -- Is_local with just one pde
-        -- Is_local but we have a system of pde's (apart from the system that it's created in the nodes)
-        -- Not Is_local with just one pde, in this case we have a mixed space in the time nodes
-        -- Not is_local, with a system of pde's, we have a mixed space in the time nodes and for the different
-        PDE's that might also be coupled, so we want that each basis to treat it coupled also.
-
-        ---> Returns: boundary conditions and test functions
-        """
-
-        if self.is_local and not isinstance(self.boundary_conditions, Iterable):
-            return (self.boundary_conditions, None)
-        elif self.is_local and isinstance(self.boundary_conditions, Iterable):
-            pass  # For system of PDEs
-        elif (not self.is_local) and (
-            not isinstance(self.boundary_conditions, Iterable)
-        ):
-            return (None, TestFunctions(self.W))
-        elif (not self.is_local) and isinstance(self.boundary_conditions, Iterable):
-            pass
-
-        # if is_local:
-        #     # Use internal setting:
-        #     self.boundary_conditions = boundary_conditions(
-        #         self.V, Constant(0.2), "on_boundary"
-        #     )
-        #     self.v = None
-        # else:
-        #     self.boundary_conditions = [
-        #         boundary_conditions(self.W.sub(i), Constant(0.2), "on_boundary")
-        #         for i in range(self.M)
-        #     ]
-        #     self.v = TestFunctions(self.W)
 
     def _solver_ensambler(self):
         pass
