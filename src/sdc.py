@@ -326,8 +326,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         self.u_k_prev.assign(self.u_k_act)
                         for s in self.solvers:
                             s.solve()
-                    afile.save_function(self.u_k_act.subfunctions[-1], idx=step)
                     last = self.u_k_act.subfunctions[-1]
+                    last.rename("u")
+                    afile.save_function(
+                        last, idx=step, timestepping_info={"time": float(t)}
+                    )
                     for sub in (
                         *self.u_k_act.subfunctions,
                         *self.u_k_prev.subfunctions,
@@ -339,8 +342,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     if self.PDEs.time_dependent_constants_bts:
                         for ct in self.PDEs.time_dependent_constants_bts:
                             ct.assign(t)
-                    step += 1
                     print(f"step: {step}, time = {t}")
+                    step += 1
+
+                return step - 1
 
         else:
             vtk = VTKFile(self.file)
@@ -366,5 +371,5 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 if self.PDEs.time_dependent_constants_bts:
                     for ct in self.PDEs.time_dependent_constants_bts:
                         ct.assign(t)
-                step += 1
                 print(f"step: {step}, time = {t}")
+                step += 1
