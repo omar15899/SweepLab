@@ -19,7 +19,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         M: int = 4,
         N: int = 1,
         dt: int | float = 1e-3,
-        is_linear: bool = False,
         is_local: bool = True,
         solver_parameters: dict | None = None,
         prectype: int | str = 0,
@@ -68,7 +67,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.PDEs = PDEs
         self.deltat = dt
         self.is_local = is_local
-        self.linear = is_linear
         self.solver_parameters = solver_parameters
         self.N = N
 
