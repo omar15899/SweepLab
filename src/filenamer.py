@@ -1,4 +1,9 @@
 import os
+import re
+from pathlib import Path
+from typing import Dict, List, Tuple
+from firedrake import *
+from firedrake.checkpointing import CheckpointFile
 
 
 class FileNamer:
@@ -59,3 +64,64 @@ class FileNamer:
                 i += 1
 
             return os.path.join(self.path_name, folder_name, base_name + ".pvd")
+
+
+class CheckpointAnalyser:
+    """
+    holds a path, a regex, and/or a list of field names,
+    so that each method can just refer to self.xxx
+    """
+
+    def __init__(self, file_path: Path, pattern: str, field_names: List[str] = ["u"]):
+        self.file_path = file_path
+        self.pattern = re.compile(pattern)
+        self.field_names = field_names
+
+    def list_checkpoints(self) -> dict:
+        """
+        no args needed here, uses self.file_path & self.pattern
+        """
+        out = {}
+        for f in self.file_path.glob("*.h5"):
+            m = self.pattern.match(f.name)
+            if not m:
+                continue
+            key = (int(m["n"]), float(m["dt"]), int(m["sw"]))
+            idx = int(m["idx"] or 0)
+            if key not in out or idx > out[key][1]:
+                out[key] = (f, idx)
+        return out
+
+    def load_checkpoint(self, filepath: Path, field: str = None):
+        """
+        load a single field (defaulting to the first in self.field_names)
+        """
+        field = field or self.field_names[0]
+        with CheckpointFile(str(filepath), "r") as f:
+            mesh = f.load_mesh()
+            hist = f.get_timestepping_history(mesh, field)
+            idx = hist["index"][-1]
+            t_end = hist["time"][-1]
+            func = f.load_function(mesh, field, idx=idx)
+        return mesh, hist, t_end, idx, func
+
+    def load_checkpoint_multiple_f(self, filepath: Path):
+        """
+        loads every name in self.field_names
+        """
+        data = {"mesh": None, "fields": {}}
+        with CheckpointFile(str(filepath), "r") as f:
+            mesh = f.load_mesh()
+            data["mesh"] = mesh
+            for name in self.field_names:
+                hist = f.get_timestepping_history(mesh, name)
+                idx = hist["index"][-1]
+                t_end = hist["time"][-1]
+                func = f.load_function(mesh, name, idx=idx)
+                data["fields"][name] = {
+                    "hist": hist,
+                    "idx": idx,
+                    "t_end": t_end,
+                    "func": func,
+                }
+        return data
