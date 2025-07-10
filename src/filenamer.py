@@ -28,11 +28,11 @@ class FileNamer:
         self.file_name = os.path.splitext(file_name)
         self.folder_name = folder_name if folder_name else "solution"
         self.path_name = path_name if path_name else os.getcwd()
-        self.file = self._create_unique_path()
         self.mode = mode
+        self.file = self._create_unique_path()
 
-        if self.mode not in self.extensions.values():
-            raise Exception("Invalid mode.")
+        # if self.mode not in self.extensions.values():
+        #     raise Exception("Invalid mode.")
 
     def _create_unique_path(self):
         """
@@ -43,7 +43,7 @@ class FileNamer:
         base_name, _ = self.file_name
         base_dir = os.path.join(self.path_name, self.folder_name)
         os.makedirs(base_dir, exist_ok=True)
-        if self.mode is not "vtk":
+        if self.mode != "vtk":
             # files with no extension
             all_files = {
                 os.path.splitext(name)[0]
@@ -122,12 +122,14 @@ class CheckpointAnalyser:
         self.pattern = re.compile(pattern)
         self.keys = [keys] if not isinstance(keys, list) else keys
         self.keys_type: List[Callable] = (
-            [keys_type] if not isinstance(keys_type, list) else keys_type  # <<< FIX
+            keys_type if isinstance(keys_type, list) else [keys_type]
         )
         self.function_names = (
-            [function_names] if not isinstance(function_names, list) else function_names
+            function_names if isinstance(function_names, list) else [function_names]
         )
         self.checkpoint_list = self.list_checkpoints()
+        if not self.checkpoint_list:
+            raise Exception("No files to explore.")
         self._mesh = None
 
         if get_function_characteristics and self.checkpoint_list:
@@ -181,7 +183,7 @@ class CheckpointAnalyser:
         load a single field (defaulting to the first in self.field_names)
         """
         with CheckpointFile(str(filepath), "r") as file:
-            mesh = self._mesh_from_file(file) if self._mesh is None else self._mesh
+            mesh = file.load_mesh()
             hist = file.get_timestepping_history(mesh, function_name)
             idx = hist["index"][-1]
             t_end = hist["time"][-1]

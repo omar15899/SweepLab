@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 from firedrake import *
-from filenamer import FileNamer, CheckpointAnalyser
+from .filenamer import FileNamer, CheckpointAnalyser
 import matplotlib.pyplot as plt
 import pandas as pd
 
