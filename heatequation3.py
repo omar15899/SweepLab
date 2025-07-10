@@ -11,7 +11,15 @@ nsweeps = 3
 n_cells = 100
 
 
-def solve_heat_pde1(dt, n_cells, nsweeps, M, Tfinal, degree=4):
+def solve_heat_pde1(
+    dt,
+    n_cells,
+    nsweeps,
+    M,
+    Tfinal,
+    prectype="MIN-SR-FLEX",
+    degree=4,
+):
 
     dt_str = f"{dt:.0e}"
     file_name = f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}"
@@ -47,7 +55,7 @@ def solve_heat_pde1(dt, n_cells, nsweeps, M, Tfinal, degree=4):
         PDEs=pde,
         M=M,
         dt=dt,
-        prectype="MIN-SR-FLEX",
+        prectype=prectype,
         file_name=file_name,
         folder_name="HE",
         path_name=(

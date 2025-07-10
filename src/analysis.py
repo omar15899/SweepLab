@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 from firedrake import *
-from filenamer import CheckpointAnalyser
+from filenamer import FileNamer, CheckpointAnalyser
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -34,7 +34,9 @@ class ConvergenceAnalyser(CheckpointAnalyser):
     automática hará el resto de cálculos pertinentes.
 
     A las funciones de los checkpoint las instanciaremos una a una y calcularemos los errores para
-    eliminarlas
+    eliminarlas.
+
+    f_exact: Serán expresiones UFL a interpolar
     """
 
     def __init__(
@@ -43,12 +45,11 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         pattern: re.Pattern,
         keys: str | List[str],
         keys_type: callable | List[callable],
-        f_exact: Function | List[Function],
-        function_names: List[str] = ["u"],
+        f_exact_ufl: Function | List[Function],
+        function_names: str | List[str] = ["u"],
         get_function_characteristics: bool = False,
     ):
         super().__init__(
-            self,
             file_path,
             pattern,
             keys,
@@ -56,14 +57,13 @@ class ConvergenceAnalyser(CheckpointAnalyser):
             function_names,
             get_function_characteristics,
         )
-        self.f_exact = [f_exact] if not isinstance(f_exact, list) else f_exact
+        self.fs_exact_ufl = (
+            f_exact_ufl if isinstance(f_exact_ufl, list) else [f_exact_ufl]
+        )
         self.df = self.create_error_table()
 
     @staticmethod
     def L2_error(f_exact, f_num):
-        # x = SpatialCoordinate(mesh)[0]
-        # V = FunctionSpace(mesh, "CG", degree=deg)
-        # u_exact = Function(V).interpolate(sin(pi * x) * exp(x * tfin))
         return errornorm(f_exact, f_num, norm_type="L2")
 
     def create_error_table(self, norm_type="L2") -> pd.DataFrame:
@@ -72,17 +72,24 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         por ahora lo vamos a hacer para el caso de una lista de 1.
         """
         result = {}
-        for key, value in self.checkpoint_list.items():
+        for key, file_params in self.checkpoint_list.items():
             # Extract the functions:
-            for f_approx, f_exact in zip(self.function_names, self.f_exact):
+            for f_approx_name, f_exact_ufl in zip(
+                self.function_names, self.fs_exact_ufl
+            ):
+                mesh, _, idx, t_end, f_approx = self.load_function_from_checkpoint(
+                    file_params[0], f_approx_name
+                )
+                V = f_approx.function_space()
+                f_exact = Function(V).interpolate(f_exact_ufl)
                 error = errornorm(f_exact, f_approx, norm_type=norm_type)
-                result[key] = result.setdefault(key, []).append(error)
+                result.setdefault(key, []).append(error)
 
         # We now convert to pandas dataframe in order to analyse it properly
         df = pd.DataFrame.from_dict(result, orient="index")
         # we convert it to multiindex
-        df.aa = pd.MultiIndex.from_tuples(df.index, names=self.keys)
-        df.columns = [fun.name() for fun in self.function_names]
+        df.index = pd.MultiIndex.from_tuples(df.index, names=self.keys)
+        df.columns = [f_name for f_name in self.function_names]
         return df
 
     def _plot_and_fit(
@@ -90,28 +97,51 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         df2: pd.DataFrame,
         x_label: str,
         title_fmt: str,
-        fitting_style: str | None,
+        save_dir: str = "figures",
+        file_stem: str = "convergence",
+        group_size: int = 8,
+        dpi: int = 300,
     ) -> Dict[str, float]:
-        """
-        This function plots the functions
-        fitting_style: "spatial", "temporal", "sweep"
-        """
+
+        save_dir = Path(save_dir).resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+
         orders: Dict[str, float] = {}
         x_vals = df2.index.astype(float)
-        for col in df2.columns:
-            y_vals = df2[col].values
-            # Fit log-log line: ln(y) = slope*ln(x) + C
-            slope, _ = np.polyfit(np.log(x_vals), np.log(y_vals), 1)
-            order = -slope
-            orders[col] = order
-            # Plot
-            plt.figure()
-            plt.loglog(x_vals, y_vals, "o-", basex=10, basey=10)
-            plt.xlabel(x_label)
-            plt.ylabel(f"{col}-error")
-            plt.title(title_fmt.format(col=col, order=order))
-            plt.grid(True, which="both")
-            plt.show()
+        cols = list(df2.columns)
+
+        page = 0
+        for start in range(0, len(cols), group_size):
+            subset = cols[start : start + group_size]
+            n_rows = int(np.ceil(len(subset) / 2))
+            fig, axes = plt.subplots(n_rows, 2, figsize=(8.27, 11.69), squeeze=False)
+            axes = axes.flatten()
+
+            for ax, col in zip(axes, subset):
+                y_vals = df2[col].values
+                slope, _ = np.polyfit(np.log(x_vals), np.log(y_vals), 1)
+                orders[col] = -slope
+
+                ax.loglog(x_vals, y_vals, marker="o")
+                ax.set_xlabel(x_label)
+                ax.set_ylabel(f"{col}-error")
+                ax.set_title(title_fmt.format(col=col, order=orders[col]))
+                ax.grid(True, which="both")
+
+            for ax in axes[len(subset) :]:
+                fig.delaxes(ax)
+            fig.tight_layout()
+
+            namer = FileNamer(
+                file_name=f"{file_stem}_page",
+                folder_name=save_dir.name,
+                path_name=str(save_dir.parent),
+                mode="pdf",
+            )
+            fig.savefig(namer.file, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+            page += 1
+
         return orders
 
     def spatial_error_convergence(
