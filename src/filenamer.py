@@ -68,44 +68,112 @@ class FileNamer:
 
 class CheckpointAnalyser:
     """
-    holds a path, a regex, and/or a list of field names,
-    so that each method can just refer to self.xxx
+    holds a path, a regex, anda list of field names,
+    so that each method can just refer to self.xxx.
+
+    When defining the regex pattern is crutial to set
+    some callable groups (not those with (?:) at the start)
+    the main reason is that if we want to retrieve the real
+    parameters for analysis purposes this is the best way
+    of gettin it done.
+
+    keys: they are the keys of the groups we have created
+        in re expresion when we insert the pattern.
+
+    keys_type: they are the types of the keys we have created
+        in re expresion when we insert the pattern.
+
+    function_names: the names of the fields we want to load
+        from the checkpoint files, by default it is set to ["u"]
+        ### ALL THE FILES NEED TO HAVE EXACTLY THE SAME AMMOUNT
+        OF FUNCTIONS. IT HAS TO BE A SIMULATION IN WHICH THE ONLY
+        THINGS WE HAVE VARIED ARE SOME PARAMETERS.
+
+    Things to work on:
+    - For now we assume we only have one mesh.
+
     """
 
-    def __init__(self, file_path: Path, pattern: str, field_names: List[str] = ["u"]):
+    def __init__(
+        self,
+        file_path: Path,
+        pattern: re.Pattern,
+        keys: str | List[str],
+        keys_type: callable | List[callable],
+        function_names: List[str] = ["u"],
+        get_function_characteristics: bool = False,
+    ):
         self.file_path = file_path
         self.pattern = re.compile(pattern)
-        self.field_names = field_names
+        self.keys = [keys] if keys is not isinstance(keys, list) else keys
+        self.keys_type = [keys_type] if not isinstance(keys_type, list) else keys_type
+        self.function_names = (
+            [function_names] if not isinstance(function_names, list) else function_names
+        )
+        self.checkpoint_list = self.list_checkpoints()
+        # Print all the spaces V in which the solutions live in order to use them for the
+        # exact solution
+        self.mesh = [] if get_function_characteristics else None
+        self.V = [] if get_function_characteristics else None
+        self.t_end = [] if get_function_characteristics else None
+        self.idx = [] if get_function_characteristics else None
+        self.f_approx = [] if get_function_characteristics else None
+
+        if get_function_characteristics:
+            for f_name in self.function_names:
+                mesh, _, t_end, idx, func = (
+                    CheckpointAnalyser.load_function_from_checkpoint(
+                        self.checkpoint_list[0], f_name
+                    )
+                )
+
+                self.mesh.append(mesh)
+                self.V = func.function_space()
+                self.f_approx = func
+                self.t_end.append(t_end)
+                self.idx.append(idx)
 
     def list_checkpoints(self) -> dict:
         """
         no args needed here, uses self.file_path & self.pattern
         """
-        out = {}
+        result = {}
         for f in self.file_path.glob("*.h5"):
             m = self.pattern.match(f.name)
             if not m:
                 continue
-            key = (int(m["n"]), float(m["dt"]), int(m["sw"]))
+            # key = (int(m["n"]), float(m["dt"]), int(m["sw"]))
+            key = tuple(
+                typename(m.group(name))
+                for typename, name in zip(self.keys_type, self.keys)
+            )
             idx = int(m["idx"] or 0)
-            if key not in out or idx > out[key][1]:
-                out[key] = (f, idx)
-        return out
+            if key not in result or idx > result[key][1]:
+                result[key] = (f, idx)
+        return result
 
-    def load_checkpoint(self, filepath: Path, field: str = None):
+    def _mesh_from_file(self, chk: CheckpointFile):
+        if self._mesh is None:
+            self._mesh = chk.load_mesh()
+        return self._mesh
+
+    def load_function_from_checkpoint(self, filepath: Path, function_name: str):
         """
         load a single field (defaulting to the first in self.field_names)
         """
-        field = field or self.field_names[0]
-        with CheckpointFile(str(filepath), "r") as f:
-            mesh = f.load_mesh()
-            hist = f.get_timestepping_history(mesh, field)
+        with CheckpointFile(str(filepath), "r") as file:
+            mesh = self._mesh_from_file(file)
+            hist = file.get_timestepping_history(mesh, function_name)
             idx = hist["index"][-1]
             t_end = hist["time"][-1]
-            func = f.load_function(mesh, field, idx=idx)
+            func = file.load_function(mesh, function_name, idx=idx)
         return mesh, hist, t_end, idx, func
 
-    def load_checkpoint_multiple_f(self, filepath: Path):
+    @staticmethod
+    def load_multiple_functions_from_checkpoint(
+        filepath: Path,
+        function_names: List[str],
+    ):
         """
         loads every name in self.field_names
         """
@@ -113,7 +181,7 @@ class CheckpointAnalyser:
         with CheckpointFile(str(filepath), "r") as f:
             mesh = f.load_mesh()
             data["mesh"] = mesh
-            for name in self.field_names:
+            for name in function_names:
                 hist = f.get_timestepping_history(mesh, name)
                 idx = hist["index"][-1]
                 t_end = hist["time"][-1]
