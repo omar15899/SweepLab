@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Callable
 from firedrake import *
 from firedrake.checkpointing import CheckpointFile
 
@@ -16,7 +16,7 @@ class FileNamer:
     ):
 
         self.is_vtk = is_vtk
-        self.is_checkpoint = True if not is_vtk else False
+        self.is_checkpoint: bool = not is_vtk
         # File saving attributes
         self.file_name = os.path.splitext(file_name)
         self.folder_name = folder_name if folder_name else "solution"
@@ -91,6 +91,10 @@ class CheckpointAnalyser:
 
     Things to work on:
     - For now we assume we only have one mesh.
+    - The getfuntioncaracteristics is only ment to be done
+    if we are sure that we can store in ram all the results, if
+    not we have to create a generator in order to call all the
+    errors in the ConvergenceAnalyser
 
     """
 
@@ -100,27 +104,30 @@ class CheckpointAnalyser:
         pattern: re.Pattern,
         keys: str | List[str],
         keys_type: callable | List[callable],
-        function_names: List[str] = ["u"],
+        function_names: str | List[str] = ["u"],
         get_function_characteristics: bool = False,
     ):
         self.file_path = file_path
         self.pattern = re.compile(pattern)
-        self.keys = [keys] if keys is not isinstance(keys, list) else keys
-        self.keys_type = [keys_type] if not isinstance(keys_type, list) else keys_type
+        self.keys = [keys] if not isinstance(keys, list) else keys
+        self.keys_type: List[Callable] = (
+            [keys_type] if not isinstance(keys_type, list) else keys_type  # <<< FIX
+        )
         self.function_names = (
             [function_names] if not isinstance(function_names, list) else function_names
         )
         self.checkpoint_list = self.list_checkpoints()
         self._mesh = None
-        # Print all the spaces V in which the solutions live in order to use them for the
-        # exact solution
-        self.mesh = [] if get_function_characteristics else None
-        self.V = [] if get_function_characteristics else None
-        self.t_end = [] if get_function_characteristics else None
-        self.idx = [] if get_function_characteristics else None
-        self.f_approx = [] if get_function_characteristics else None
 
-        if get_function_characteristics:
+        if get_function_characteristics and self.checkpoint_list:
+            self.mesh, self.V, self.t_end, self.idx, self.f_approx = (
+                [],
+                [],
+                [],
+                [],
+                [],
+            )
+            first_file = next(iter(self.checkpoint_list.values()))[0]
             for f_name in self.function_names:
                 mesh, _, t_end, idx, func = (
                     CheckpointAnalyser.load_function_from_checkpoint(
@@ -139,8 +146,8 @@ class CheckpointAnalyser:
         no args needed here, uses self.file_path & self.pattern
         """
         result = {}
-        for f in self.file_path.glob("*.h5"):
-            m = self.pattern.match(f.name)
+        for file in self.file_path.glob("*.h5"):
+            m = self.pattern.match(file.name)
             if not m:
                 continue
             # key = (int(m["n"]), float(m["dt"]), int(m["sw"]))
@@ -150,12 +157,12 @@ class CheckpointAnalyser:
             )
             idx = int(m["idx"] or 0)
             if key not in result or idx > result[key][1]:
-                result[key] = (f, idx)
+                result[key] = (file, idx)
         return result
 
-    def _mesh_from_file(self, chk: CheckpointFile):
+    def _mesh_from_file(self, file: CheckpointFile):
         if self._mesh is None:
-            self._mesh = chk.load_mesh()
+            self._mesh = file.load_mesh()
         return self._mesh
 
     def load_function_from_checkpoint(self, filepath: Path, function_name: str):
