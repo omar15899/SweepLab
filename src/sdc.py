@@ -1,4 +1,4 @@
-from typing import Iterable
+from typing import Iterable, Literal
 import numpy as np
 from firedrake import *
 from firedrake.output import VTKFile
@@ -26,7 +26,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         file_name: str = "solution",
         folder_name: str | None = None,
         path_name: str | None = None,
-        is_vtk: bool = False,
+        mode: Literal["checkpoint", "vtk", "pdf"] = "checkpoint",
     ):
         """
         Mesh : Predermined mesh
@@ -53,7 +53,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             file_name=file_name,
             folder_name=folder_name,
             path_name=path_name,
-            is_vtk=is_vtk,
+            mode=mode,
         )
         # Initialise preconditioner infrastructure
         SDCPreconditioners.__init__(
@@ -311,7 +311,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
     def solve(self, T, sweeps):
         t, step = 0.0, 0
 
-        if self.is_checkpoint:
+        if self.mode != "vtk":
             with CheckpointFile(self.file, "w") as afile:
                 # Save the mesh
                 afile.save_mesh(self.mesh)

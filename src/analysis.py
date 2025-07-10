@@ -77,7 +77,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
             for f_approx_name, f_exact_ufl in zip(
                 self.function_names, self.fs_exact_ufl
             ):
-                mesh, _, idx, t_end, f_approx = self.load_function_from_checkpoint(
+                mesh, _, t_end, idx, f_approx = self.load_function_from_checkpoint(
                     file_params[0], f_approx_name
                 )
                 V = f_approx.function_space()
@@ -101,46 +101,133 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         file_stem: str = "convergence",
         group_size: int = 8,
         dpi: int = 300,
+        marker_size: int = 55,
+        fit_line: bool = True,
     ) -> Dict[str, float]:
+        """
+        Dibuja errores vs. paso/grado, estima el orden y guarda PDF+PNG.
 
+        Si alguna serie contiene ceros/negativos, ese panel pasa a escala
+        lineal (se anota el motivo) para evitar el ValueError de Matplotlib.
+        """
         save_dir = Path(save_dir).resolve()
         save_dir.mkdir(parents=True, exist_ok=True)
 
         orders: Dict[str, float] = {}
-        x_vals = df2.index.astype(float)
-        cols = list(df2.columns)
+        cols: List[str] = list(df2.columns)
 
-        page = 0
-        for start in range(0, len(cols), group_size):
-            subset = cols[start : start + group_size]
-            n_rows = int(np.ceil(len(subset) / 2))
-            fig, axes = plt.subplots(n_rows, 2, figsize=(1, 1), squeeze=False)
-            axes = axes.flatten()
+        # -------- estilo global --------
+        with plt.rc_context(
+            {
+                "font.size": 10,
+                "axes.titlesize": 11,
+                "axes.labelsize": 10,
+                "legend.fontsize": 9,
+                "xtick.labelsize": 9,
+                "ytick.labelsize": 9,
+                "lines.linewidth": 1.4,
+                "figure.dpi": dpi,
+            }
+        ):
+            for page, start in enumerate(range(0, len(cols), group_size), 1):
+                subset = cols[start : start + group_size]
+                n_rows = int(np.ceil(len(subset) / 2))
+                n_cols = 2
 
-            for ax, col in zip(axes, subset):
-                y_vals = df2[col].values
-                slope, _ = np.polyfit(np.log(x_vals), np.log(y_vals), 1)
-                orders[col] = -slope
+                # ------------- figura -------------
+                fig, axes = plt.subplots(
+                    n_rows,
+                    n_cols,
+                    figsize=(5.0 * n_cols, 3.8 * n_rows),
+                    squeeze=False,
+                    constrained_layout=True,  # adiós tight_layout y sus warnings
+                )
+                axes = axes.flatten()
 
-                ax.loglog(x_vals, y_vals, marker="o")
-                ax.set_xlabel(x_label)
-                ax.set_ylabel(f"{col}-error")
-                ax.set_title(title_fmt.format(col=col, order=orders[col]))
-                ax.grid(True, which="both")
+                for ax, col in zip(axes, subset):
+                    y_raw = df2[col].to_numpy(float)
+                    x_raw = df2.index.to_numpy(float)
 
-            for ax in axes[len(subset) :]:
-                fig.delaxes(ax)
-            fig.tight_layout()
+                    # Filtramos pares positivos; si quedan <2, no podemos log-ajustar
+                    pos_mask = (x_raw > 0) & (y_raw > 0)
+                    x_use, y_use = x_raw[pos_mask], y_raw[pos_mask]
 
-            namer = FileNamer(
-                file_name=f"{file_stem}_page",
-                folder_name=save_dir.name,
-                path_name=str(save_dir.parent),
-                mode="pdf",
-            )
-            fig.savefig(namer.file, dpi=dpi, bbox_inches="tight")
-            plt.close(fig)
-            page += 1
+                    logscale_ok = x_use.size >= 2
+
+                    if logscale_ok:
+                        # Ajuste log–log
+                        slope, intercept = np.polyfit(np.log(x_use), np.log(y_use), 1)
+                        orders[col] = -slope
+
+                        ax.set_xscale("log")
+                        ax.set_yscale("log")
+                        ax.scatter(
+                            x_use,
+                            y_use,
+                            s=marker_size,
+                            zorder=3,
+                            label="datos",
+                        )
+                        if fit_line:
+                            ax.plot(
+                                x_use,
+                                np.exp(intercept) * x_use**slope,
+                                "--",
+                                alpha=0.9,
+                                label=f"ajuste  p≈{slope:.2f}",
+                            )
+                    else:
+                        # Escala lineal; anotamos la razón
+                        orders[col] = np.nan
+                        ax.scatter(
+                            x_raw,
+                            y_raw,
+                            s=marker_size,
+                            zorder=3,
+                            label="datos",
+                        )
+                        ax.text(
+                            0.5,
+                            0.5,
+                            "escala lineal\n(ceros o negativos)",
+                            transform=ax.transAxes,
+                            ha="center",
+                            va="center",
+                            fontsize=8,
+                            color="crimson",
+                        )
+
+                    ax.set_xlabel(x_label)
+                    ax.set_ylabel(f"{col}-error")
+                    ax.set_title(title_fmt.format(col=col, order=orders[col]))
+
+                    # Error mínimo de la serie (en la escala actual)
+                    ymin = y_raw.min()
+                    ax.annotate(
+                        f"min = {ymin:.2e}",
+                        xy=(x_raw[-1], ymin),
+                        xytext=(3, -12),
+                        textcoords="offset points",
+                        ha="left",
+                        va="top",
+                        fontsize=8,
+                    )
+
+                    ax.grid(True, which="both", linewidth=0.4, alpha=0.5)
+
+                # Quita paneles vacíos
+                for ax in axes[len(subset) :]:
+                    fig.delaxes(ax)
+
+                namer = FileNamer(
+                    file_name=f"{file_stem}_page{page}",
+                    folder_name=save_dir.name,
+                    path_name=str(save_dir.parent),
+                    mode="pdf",
+                )
+                fig.savefig(namer.file)  # PDF vectorial
+                # fig.savefig(namer.file.with_suffix(".png"))  # PNG rápido
+                plt.close(fig)
 
         return orders
 
@@ -151,6 +238,8 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         temporal_val: float,
         sweep_key: str,
         sweep_val: int,
+        spatial_lower_bound: float | None = None,
+        spatial_higher_bound: float | None = None,
         **kwargs: Any,
     ) -> Dict[str, float]:
         """
@@ -162,6 +251,16 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         """
         idx = {temporal_key: temporal_val, sweep_key: sweep_val, **kwargs}
         df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
+        values = df2.index.get_level_values(spatial_key)
+        mask_lower = (
+            (values > spatial_lower_bound) if spatial_lower_bound is not None else True
+        )
+        mask_upper = (
+            (values < spatial_higher_bound)
+            if spatial_higher_bound is not None
+            else True
+        )
+        df2 = df2[mask_lower & mask_upper]
         df2 = df2.sort_index()
         return self._plot_and_fit(
             df2,
@@ -176,6 +275,8 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         spatial_val: float,
         sweep_key: str,
         sweep_val: int,
+        temporal_lower_bound: int | None = None,
+        temporal_higher_bound: int | None = None,
         **kwargs: Any,
     ) -> Dict[str, float]:
         """
@@ -183,6 +284,18 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         """
         idx = {spatial_key: spatial_val, sweep_key: sweep_val, **kwargs}
         df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
+        mask1 = (
+            (df2.index.get_level_values(temporal_key) > temporal_lower_bound)
+            if temporal_lower_bound is not None
+            else True
+        )
+        mask2 = (
+            (df2.index.get_level_values(temporal_key) < temporal_higher_bound)
+            if temporal_higher_bound is not None
+            else True
+        )
+        mask = mask1 & mask2
+        df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
             df2,
@@ -197,6 +310,8 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         spatial_val: float,
         temporal_key: str,
         temporal_val: float,
+        sweep_lower_bound: int | None = None,
+        sweep_higher_bound: int | None = None,
         **kwargs: Any,
     ) -> Dict[str, float]:
         """
@@ -205,6 +320,14 @@ class ConvergenceAnalyser(CheckpointAnalyser):
 
         idx = {spatial_key: spatial_val, temporal_key: temporal_val, **kwargs}
         df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
+        values = df2.index.get_level_values(sweep_key)
+        mask_lower = (
+            (values > sweep_lower_bound) if sweep_lower_bound is not None else True
+        )
+        mask_upper = (
+            (values < sweep_higher_bound) if sweep_higher_bound is not None else True
+        )
+        df2 = df2[mask_lower & mask_upper]
         df2 = df2.sort_index()
         return self._plot_and_fit(
             df2,
