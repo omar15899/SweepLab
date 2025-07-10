@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 from firedrake import *
 from filenamer import CheckpointAnalyser
 import matplotlib.pyplot as plt
@@ -57,6 +57,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
             get_function_characteristics,
         )
         self.f_exact = [f_exact] if not isinstance(f_exact, list) else f_exact
+        self.df = self.create_error_table()
 
     @staticmethod
     def L2_error(f_exact, f_num):
@@ -78,3 +79,105 @@ class ConvergenceAnalyser(CheckpointAnalyser):
                 result[key] = result.setdefault(key, []).append(error)
 
         # We now convert to pandas dataframe in order to analyse it properly
+        df = pd.DataFrame.from_dict(result, orient="index")
+        # we convert it to multiindex
+        df.aa = pd.MultiIndex.from_tuples(df.index, names=self.keys)
+        df.columns = [fun.name() for fun in self.function_names]
+        return df
+
+    def _plot_and_fit(
+        self,
+        df2: pd.DataFrame,
+        x_label: str,
+        title_fmt: str,
+        fitting_style: str | None,
+    ) -> Dict[str, float]:
+        """
+        This function plots the functions
+        fitting_style: "spatial", "temporal", "sweep"
+        """
+        orders: Dict[str, float] = {}
+        x_vals = df2.index.astype(float)
+        for col in df2.columns:
+            y_vals = df2[col].values
+            # Fit log-log line: ln(y) = slope*ln(x) + C
+            slope, _ = np.polyfit(np.log(x_vals), np.log(y_vals), 1)
+            order = -slope
+            orders[col] = order
+            # Plot
+            plt.figure()
+            plt.loglog(x_vals, y_vals, "o-", basex=10, basey=10)
+            plt.xlabel(x_label)
+            plt.ylabel(f"{col}-error")
+            plt.title(title_fmt.format(col=col, order=order))
+            plt.grid(True, which="both")
+            plt.show()
+        return orders
+
+    def spatial_error_convergence(
+        self,
+        spatial_key: str,
+        temporal_key: str,
+        temporal_val: float,
+        sweep_key: str,
+        sweep_val: int,
+        **kwargs: Any,
+    ) -> Dict[str, float]:
+        """
+        We need to have the reference of the spatial_key within
+        the multindex in order to achieve correctly everything.
+
+        kwargs is in case we have more indexes from the multi index
+        that we have to fix.
+        """
+        idx = {temporal_key: temporal_val, sweep_key: sweep_val, **kwargs}
+        df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
+        df2 = df2.sort_index()
+        return self._plot_and_fit(
+            df2,
+            x_label=spatial_key,
+            title_fmt=f"Spatial convergence (dt={temporal_val}, sw={sweep_val}) — {{col}}: order≈{{order:.2f}}",
+        )
+
+    def temporal_error_convergence(
+        self,
+        temporal_key: str,
+        spatial_key: str,
+        spatial_val: float,
+        sweep_key: str,
+        sweep_val: int,
+        **kwargs: Any,
+    ) -> Dict[str, float]:
+        """
+        Fix n=spatial_val, sw=sweep_val and vary temporal_key.
+        """
+        idx = {spatial_key: spatial_val, sweep_key: sweep_val, **kwargs}
+        df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
+        df2 = df2.sort_index()
+        return self._plot_and_fit(
+            df2,
+            x_label=temporal_key,
+            title_fmt=f"Temporal convergence (n={spatial_val}, sw={sweep_val}) — {{col}}: order≈{{order:.2f}}",
+        )
+
+    def sweep_error_convergence(
+        self,
+        sweep_key: str,
+        spatial_key: str,
+        spatial_val: float,
+        temporal_key: str,
+        temporal_val: float,
+        **kwargs: Any,
+    ) -> Dict[str, float]:
+        """
+        Fix n=spatial_val, dt=temporal_val and vary sweep_key.
+        """
+
+        idx = {spatial_key: spatial_val, temporal_key: temporal_val, **kwargs}
+        df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
+        df2 = df2.sort_index()
+        return self._plot_and_fit(
+            df2,
+            x_label=sweep_key,
+            title_fmt=f"Sweep convergence (n={spatial_val}, dt={temporal_val}) — {{col}}: order≈{{order:.2f}}",
+        )

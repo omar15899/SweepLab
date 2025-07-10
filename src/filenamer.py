@@ -111,6 +111,7 @@ class CheckpointAnalyser:
             [function_names] if not isinstance(function_names, list) else function_names
         )
         self.checkpoint_list = self.list_checkpoints()
+        self._mesh = None
         # Print all the spaces V in which the solutions live in order to use them for the
         # exact solution
         self.mesh = [] if get_function_characteristics else None
@@ -162,7 +163,7 @@ class CheckpointAnalyser:
         load a single field (defaulting to the first in self.field_names)
         """
         with CheckpointFile(str(filepath), "r") as file:
-            mesh = self._mesh_from_file(file)
+            mesh = self._mesh_from_file(file) if self._mesh is None else self._mesh
             hist = file.get_timestepping_history(mesh, function_name)
             idx = hist["index"][-1]
             t_end = hist["time"][-1]
