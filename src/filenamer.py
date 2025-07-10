@@ -1,27 +1,38 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple, Callable
+from typing import Dict, List, Tuple, Callable, Literal
 from firedrake import *
 from firedrake.checkpointing import CheckpointFile
 
 
 class FileNamer:
+    extensions = {
+        "checkpoint": ".h5",
+        "vtk": ".pvd",
+        "pdf": ".pdf",
+        "png": ".png",
+        "txt": ".txt",
+        "json": ".json",
+    }
+
     def __init__(
         self,
         file_name: str = "solution",
         folder_name: str | None = None,
         path_name: str | None = None,
-        is_vtk: bool = False,
+        mode: Literal["checkpoint", "vtk", "pdf"] = "checkpoint",
     ):
 
-        self.is_vtk = is_vtk
-        self.is_checkpoint: bool = not is_vtk
         # File saving attributes
         self.file_name = os.path.splitext(file_name)
         self.folder_name = folder_name if folder_name else "solution"
         self.path_name = path_name if path_name else os.getcwd()
         self.file = self._create_unique_path()
+        self.mode = mode
+
+        if self.mode not in self.extensions.values():
+            raise Exception("Invalid mode.")
 
     def _create_unique_path(self):
         """
@@ -32,7 +43,7 @@ class FileNamer:
         base_name, _ = self.file_name
         base_dir = os.path.join(self.path_name, self.folder_name)
         os.makedirs(base_dir, exist_ok=True)
-        if self.is_checkpoint:
+        if self.mode is not "vtk":
             # files with no extension
             all_files = {
                 os.path.splitext(name)[0]
@@ -47,7 +58,7 @@ class FileNamer:
                     break
                 i += 1
 
-            return os.path.join(base_dir, file_name + ".h5")
+            return os.path.join(base_dir, file_name + self.extensions[self.mode])
 
         else:
             all_folders = {
