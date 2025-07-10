@@ -81,7 +81,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
                     file_params[0], f_approx_name
                 )
                 V = f_approx.function_space()
-                f_exact = Function(V).interpolate(f_exact_ufl)
+                f_exact = Function(V).interpolate(f_exact_ufl(t_end))
                 error = errornorm(f_exact, f_approx, norm_type=norm_type)
                 result.setdefault(key, []).append(error)
 
@@ -114,7 +114,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         for start in range(0, len(cols), group_size):
             subset = cols[start : start + group_size]
             n_rows = int(np.ceil(len(subset) / 2))
-            fig, axes = plt.subplots(n_rows, 2, figsize=(8.27, 11.69), squeeze=False)
+            fig, axes = plt.subplots(n_rows, 2, figsize=(1, 1), squeeze=False)
             axes = axes.flatten()
 
             for ax, col in zip(axes, subset):

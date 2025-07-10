@@ -118,8 +118,10 @@ class CheckpointAnalyser:
         function_names: str | List[str] = ["u"],
         get_function_characteristics: bool = False,
     ):
-        self.file_path = file_path
-        self.pattern = re.compile(pattern)
+        self.file_path = file_path if isinstance(file_path, Path) else Path(file_path)
+        self.pattern = (
+            pattern if isinstance(pattern, re.Pattern) else re.compile(pattern)
+        )
         self.keys = [keys] if not isinstance(keys, list) else keys
         self.keys_type: List[Callable] = (
             keys_type if isinstance(keys_type, list) else [keys_type]
