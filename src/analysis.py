@@ -87,7 +87,10 @@ class ConvergenceAnalyser(CheckpointAnalyser):
                 error = errornorm(f_exact, f_approx, norm_type=norm_type)
                 result.setdefault(key, []).append(error)
 
-            if k % 20 == 0:
+            if k % 5 == 0:
+                # We have to delete all the meshesh in memory that are
+                # not being used, if not an exception will arise with
+                # enough big files.
                 gc.collect()
 
         # We now convert to pandas dataframe in order to analyse it properly
@@ -115,6 +118,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         Si alguna serie contiene ceros/negativos, ese panel pasa a escala
         lineal (se anota el motivo) para evitar el ValueError de Matplotlib.
         """
+
         save_dir = Path(save_dir).resolve()
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -151,7 +155,10 @@ class ConvergenceAnalyser(CheckpointAnalyser):
 
                 for ax, col in zip(axes, subset):
                     y_raw = df2[col].to_numpy(float)
-                    x_raw = df2.index.to_numpy(float)
+                    if isinstance(df2.index, pd.MultiIndex):
+                        x_raw = df2.index.get_level_values(x_label).to_numpy(float)
+                    else:
+                        x_raw = df2.index.to_numpy(float)
 
                     # Filtramos pares positivos; si quedan <2, no podemos log-ajustar
                     pos_mask = (x_raw > 0) & (y_raw > 0)
@@ -256,16 +263,13 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         """
         idx = {temporal_key: temporal_val, sweep_key: sweep_val, **kwargs}
         df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
-        values = df2.index.get_level_values(spatial_key)
-        mask_lower = (
-            (values > spatial_lower_bound) if spatial_lower_bound is not None else True
-        )
-        mask_upper = (
-            (values < spatial_higher_bound)
-            if spatial_higher_bound is not None
-            else True
-        )
-        df2 = df2[mask_lower & mask_upper]
+        values = df2.index.get_level_values(spatial_key).to_numpy(float)
+        mask = np.ones(values.size, dtype=bool)
+        if spatial_lower_bound is not None:
+            mask &= values > spatial_lower_bound
+        if spatial_higher_bound is not None:
+            mask &= values < spatial_higher_bound
+        df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
             df2,
@@ -289,17 +293,12 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         """
         idx = {spatial_key: spatial_val, sweep_key: sweep_val, **kwargs}
         df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
-        mask1 = (
-            (df2.index.get_level_values(temporal_key) > temporal_lower_bound)
-            if temporal_lower_bound is not None
-            else True
-        )
-        mask2 = (
-            (df2.index.get_level_values(temporal_key) < temporal_higher_bound)
-            if temporal_higher_bound is not None
-            else True
-        )
-        mask = mask1 & mask2
+        values = df2.index.get_level_values(temporal_key).to_numpy(float)
+        mask = np.ones(values.size, dtype=bool)
+        if temporal_lower_bound is not None:
+            mask &= values > temporal_lower_bound
+        if temporal_higher_bound is not None:
+            mask &= values < temporal_higher_bound
         df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
@@ -325,14 +324,13 @@ class ConvergenceAnalyser(CheckpointAnalyser):
 
         idx = {spatial_key: spatial_val, temporal_key: temporal_val, **kwargs}
         df2 = self.df.xs(tuple(idx.values()), level=list(idx.keys()))
-        values = df2.index.get_level_values(sweep_key)
-        mask_lower = (
-            (values > sweep_lower_bound) if sweep_lower_bound is not None else True
-        )
-        mask_upper = (
-            (values < sweep_higher_bound) if sweep_higher_bound is not None else True
-        )
-        df2 = df2[mask_lower & mask_upper]
+        values = df2.index.get_level_values(sweep_key).to_numpy(float)
+        mask = np.ones(values.size, dtype=bool)
+        if sweep_lower_bound is not None:
+            mask &= values > sweep_lower_bound
+        if sweep_higher_bound is not None:
+            mask &= values < sweep_higher_bound
+        df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
             df2,
