@@ -1,4 +1,5 @@
 import re
+import gc
 from pathlib import Path
 from typing import List, Dict, Any
 from firedrake import *
@@ -72,7 +73,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         por ahora lo vamos a hacer para el caso de una lista de 1.
         """
         result = {}
-        for key, file_params in self.checkpoint_list.items():
+        for k, (key, file_params) in enumerate(self.checkpoint_list.items(), 1):
             # Extract the functions:
             for f_approx_name, f_exact_ufl in zip(
                 self.function_names, self.fs_exact_ufl
@@ -81,9 +82,13 @@ class ConvergenceAnalyser(CheckpointAnalyser):
                     file_params[0], f_approx_name
                 )
                 V = f_approx.function_space()
-                f_exact = Function(V).interpolate(f_exact_ufl(t_end))
+                x = SpatialCoordinate(mesh)
+                f_exact = Function(V).interpolate(f_exact_ufl(t_end, x))
                 error = errornorm(f_exact, f_approx, norm_type=norm_type)
                 result.setdefault(key, []).append(error)
+
+            if k % 20 == 0:
+                gc.collect()
 
         # We now convert to pandas dataframe in order to analyse it properly
         df = pd.DataFrame.from_dict(result, orient="index")
