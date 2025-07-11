@@ -4,13 +4,6 @@ from src.sdc import SDCSolver
 from src.specs import PDESystem
 
 
-Tfinal = 0.5
-dt = 1e-4
-M = 4
-nsweeps = 3
-n_cells = 100
-
-
 def solve_heat_pde1(
     dt,
     n_cells,
@@ -22,7 +15,8 @@ def solve_heat_pde1(
 ):
 
     dt_str = f"{dt:.0e}"
-    file_name = f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}"
+    Tfinal_str = f"{Tfinal:.0e}"
+    file_name = f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}_nodes{M}_degreepol{degree}_prectype{prectype}_tfinal{Tfinal}"
 
     mesh = IntervalMesh(n_cells, length_or_left=0, right=1)
     x = SpatialCoordinate(mesh)[0]
@@ -67,9 +61,22 @@ def solve_heat_pde1(
     solver.solve(Tfinal, nsweeps)
 
 
-N_CELLS = [25, 50, 100, 200, 400, 800]
+# N_CELLS = [25, 50, 100, 200, 400, 800]
+N_CELLS = [1, 4, 8, 16, 25, 50, 100, 200, 400, 800]
 DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
 SWEEPS = [1, 2, 3, 4, 5, 6]
+DEGREE = [1, 2, 3, 4]
 
-for n, dt, sw in product(N_CELLS, DT_LIST, SWEEPS):
-    solve_heat_pde1(dt=dt, n_cells=n, nsweeps=sw, M=4, Tfinal=0.5)
+TFINAL = 0.5
+M = 4
+
+for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
+    solve_heat_pde1(
+        dt=dt,
+        n_cells=n,
+        nsweeps=sw,
+        M=M,
+        Tfinal=TFINAL,
+        prectype="MIN-SR-FLEX",
+        degree=deg,
+    )

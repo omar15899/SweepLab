@@ -55,4 +55,4 @@ solver = SDCSolver(
     is_vtk=True,
 )
 solver.solve(T=Tfinal, sweeps=nsweeps)
-print("Simulación terminada 🎉")
+print("Simulación terminada")
