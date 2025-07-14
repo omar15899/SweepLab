@@ -1,4 +1,5 @@
 from typing import Iterable, Literal
+from pathlib import Path
 import numpy as np
 from firedrake import *
 from firedrake.output import VTKFile
@@ -371,3 +372,5 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         ct.assign(t)
                 print(f"step: {step}, time = {t}")
                 step += 1
+
+        return step - 1 if self.mode != "vtk" else None

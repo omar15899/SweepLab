@@ -108,7 +108,7 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        orders: Dict[str, float] = {}
+        orders = {}
 
         for col in df2.columns:
             # Extraemos x, y (si hay MultiIndex tomamos el nivel que toca)
@@ -119,16 +119,14 @@ class ConvergenceAnalyser(CheckpointAnalyser):
             y = df2[col].astype(float).to_numpy()
 
             fig, ax = plt.subplots(figsize=(6, 4))
-            ax.scatter(x, y, s=40, label="datos")
+            ax.scatter(x, y, s=40, label="data")
 
             # Ajuste log–log sólo con puntos positivos
             mask = (x > 0) & (y > 0)
             if mask.sum() >= 2:
                 m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
                 orders[col] = -m
-                ax.plot(
-                    x[mask], np.exp(b) * x[mask] ** m, "--", label=f"pend. ≈ {m:.2f}"
-                )
+                ax.plot(x[mask], np.exp(b) * x[mask] ** m, "--", label=f"slope={m:.2f}")
                 ax.set_xscale("log")
                 ax.set_yscale("log")
             else:
@@ -136,12 +134,15 @@ class ConvergenceAnalyser(CheckpointAnalyser):
 
             ax.set_xlabel(x_label)
             ax.set_ylabel(f"{col} error")
-            ax.set_title(title_fmt.format(col=col, order=orders[col]))
+            ax.set_title(title_fmt)
             ax.legend()
             ax.grid(True, which="both", alpha=0.4)
             fig.tight_layout()
 
-            fig.savefig(save_dir / f"{file_stem}_{col}.png", dpi=dpi)
+            namer = FileNamer(
+                file_name=f"{file_stem}_{col}", folder_name=save_dir, mode="png"
+            )
+            fig.savefig(namer.file, dpi=dpi)
             plt.close(fig)
 
         return orders
@@ -169,9 +170,9 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         values = df2.index.get_level_values(spatial_key).to_numpy(float)
         mask = np.ones(values.size, dtype=bool)
         if spatial_lower_bound is not None:
-            mask &= values > spatial_lower_bound
+            mask &= values >= spatial_lower_bound
         if spatial_higher_bound is not None:
-            mask &= values < spatial_higher_bound
+            mask &= values <= spatial_higher_bound
         df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
@@ -199,9 +200,9 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         values = df2.index.get_level_values(temporal_key).to_numpy(float)
         mask = np.ones(values.size, dtype=bool)
         if temporal_lower_bound is not None:
-            mask &= values > temporal_lower_bound
+            mask &= values >= temporal_lower_bound
         if temporal_higher_bound is not None:
-            mask &= values < temporal_higher_bound
+            mask &= values <= temporal_higher_bound
         df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
@@ -230,9 +231,9 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         values = df2.index.get_level_values(sweep_key).to_numpy(float)
         mask = np.ones(values.size, dtype=bool)
         if sweep_lower_bound is not None:
-            mask &= values > sweep_lower_bound
+            mask &= values >= sweep_lower_bound
         if sweep_higher_bound is not None:
-            mask &= values < sweep_higher_bound
+            mask &= values <= sweep_higher_bound
         df2 = df2[mask]
         df2 = df2.sort_index()
         return self._plot_and_fit(
@@ -240,3 +241,8 @@ class ConvergenceAnalyser(CheckpointAnalyser):
             x_label=sweep_key,
             title_fmt=f"Sweep convergence (n={spatial_val}, dt={temporal_val}) — {{col}}: order≈{{order:.2f}}",
         )
+
+    def time_efficiency(
+        self,
+    ):
+        pass
