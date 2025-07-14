@@ -44,10 +44,11 @@ analyser = ConvergenceAnalyser(
 
 
 # SPATIAL CONVERGENCE STUDY
-DT_REF = 1e-1
+DT_REF = 1e-5
 SW_REF = 1
 analyser.spatial_error_convergence(
     spatial_key="n",
+    spatial_lower_bound=4,
     temporal_key="dt",
     temporal_val=DT_REF,
     sweep_key="sw",
@@ -56,7 +57,7 @@ analyser.spatial_error_convergence(
 )
 
 # TEMPORAL CONVERGENCE STUDY
-N_REF = 4
+N_REF = 400
 SW_REF = 1
 analyser.temporal_error_convergence(
     temporal_key="dt",
@@ -69,13 +70,14 @@ analyser.temporal_error_convergence(
 
 # SWEEP CONVERGENCE STUDY
 # for dt_ref in (1e-1, 1e-2, 1e-3, 1e-4, 1e-5):
-
+N_REF = 400
 DT_REF = 1e-1
-analyser.sweep_error_convergence(
-    sweep_key="sw",
-    spatial_key="n",
-    spatial_val=N_REF,
-    temporal_key="dt",
-    temporal_val=DT_REF,
-    degreepol=1,
-)
+for dt in (1e-1, 1e-2, 1e-3, 1e-4, 1e-5):
+    analyser.sweep_error_convergence(
+        sweep_key="sw",
+        spatial_key="n",
+        spatial_val=N_REF,
+        temporal_key="dt",
+        temporal_val=dt,
+        degreepol=1,
+    )

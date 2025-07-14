@@ -53,6 +53,12 @@ class SDCPreconditioners:
         elif self.prectype == "MIN-SR-NS":
             return np.diag(self.tau) / self.M
         elif self.prectype in {"MIN-SR-S", "MIN-SR-FLEX"}:
+            # Special case tau0=0
+            if np.isclose(self.tau[0], 0.0):
+                D = np.diag(self.tau)
+                # Added remark 2.11 from paper
+                D[0, 0] = 0.0
+                return D
             return np.diag(self.tau)
         else:
             raise Exception("there's no other preconditioners defined")

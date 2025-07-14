@@ -2,6 +2,10 @@ from firedrake import *
 from itertools import product
 from src.sdc import SDCSolver
 from src.specs import PDESystem
+from datetime import datetime
+
+now = datetime.now()
+time_str = now.strftime("%Y_%m_%d_%H_%M_%S")
 
 
 def solve_heat_pde1(
@@ -51,7 +55,7 @@ def solve_heat_pde1(
         dt=dt,
         prectype=prectype,
         file_name=file_name,
-        folder_name="HE",
+        folder_name=f"HE_{time_str}",
         path_name=(
             "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/"
             "programming/solver/tests/heatfiles"
@@ -61,11 +65,17 @@ def solve_heat_pde1(
     solver.solve(Tfinal, nsweeps)
 
 
-# N_CELLS = [25, 50, 100, 200, 400, 800]
-N_CELLS = [1, 4, 8, 16, 25, 50, 100, 200, 400, 800]
-DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
-SWEEPS = [1, 2, 3, 4, 5, 6]
-DEGREE = [1, 2, 3, 4]
+# N_CELLS = [1, 4, 8, 16, 25, 50, 100, 200, 400, 800]
+# DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+# SWEEPS = [1, 2, 3, 4, 5, 6]
+# DEGREE = [1, 2, 3, 4]
+
+
+N_CELLS = [10]
+DT_LIST = [1e-2]
+SWEEPS = [4]
+DEGREE = [4]
+
 
 TFINAL = 0.5
 M = 4
@@ -80,3 +90,10 @@ for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
         prectype="MIN-SR-FLEX",
         degree=deg,
     )
+
+
+"""
+
+vale, creo que hay un problema serio, y ese problema tiene que ver con cómo se plotea cada error, me gustaría que modificaras la función de plotting para generar las curvas correctas para cada uno de los errores, se muy consciente de que tiene que verse bien y tiene que maximizar la información que me puedes 
+
+"""

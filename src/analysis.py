@@ -7,12 +7,6 @@ from .filenamer import FileNamer, CheckpointAnalyser
 import matplotlib.pyplot as plt
 import pandas as pd
 
-
-# # general pattern ‘heat_n{n}_dt{dt}_sw{sw}_{idx?}.h5’
-# PAT = re.compile(
-#     r"heat_n(?P<n>\d+)_dt(?P<dt>[0-9eE\+\-]+)_sw(?P<sw>\d+)" r"(?:_(?P<idx>\d+))?\.h5$"
-# )
-
 file_path = Path(
     "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/tests/heatfiles/HE"
 )
@@ -106,140 +100,49 @@ class ConvergenceAnalyser(CheckpointAnalyser):
         x_label: str,
         title_fmt: str,
         save_dir: str = "figures",
-        file_stem: str = "convergence",
-        group_size: int = 8,
+        file_stem: str = "conv",
         dpi: int = 300,
-        marker_size: int = 55,
-        fit_line: bool = True,
     ) -> Dict[str, float]:
-        """
-        Dibuja errores vs. paso/grado, estima el orden y guarda PDF+PNG.
 
-        Si alguna serie contiene ceros/negativos, ese panel pasa a escala
-        lineal (se anota el motivo) para evitar el ValueError de Matplotlib.
-        """
-
-        save_dir = Path(save_dir).resolve()
+        plt.style.use("ggplot")
+        save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
         orders: Dict[str, float] = {}
-        cols: List[str] = list(df2.columns)
 
-        # -------- estilo global --------
-        with plt.rc_context(
-            {
-                "font.size": 10,
-                "axes.titlesize": 11,
-                "axes.labelsize": 10,
-                "legend.fontsize": 9,
-                "xtick.labelsize": 9,
-                "ytick.labelsize": 9,
-                "lines.linewidth": 1.4,
-                "figure.dpi": dpi,
-            }
-        ):
-            for page, start in enumerate(range(0, len(cols), group_size), 1):
-                subset = cols[start : start + group_size]
-                n_rows = int(np.ceil(len(subset) / 2))
-                n_cols = 2
+        for col in df2.columns:
+            # Extraemos x, y (si hay MultiIndex tomamos el nivel que toca)
+            if isinstance(df2.index, pd.MultiIndex):
+                x = df2.index.get_level_values(x_label).astype(float).to_numpy()
+            else:
+                x = df2.index.astype(float).to_numpy()
+            y = df2[col].astype(float).to_numpy()
 
-                # ------------- figura -------------
-                fig, axes = plt.subplots(
-                    n_rows,
-                    n_cols,
-                    figsize=(5.0 * n_cols, 3.8 * n_rows),
-                    squeeze=False,
-                    constrained_layout=True,  # adiós tight_layout y sus warnings
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.scatter(x, y, s=40, label="datos")
+
+            # Ajuste log–log sólo con puntos positivos
+            mask = (x > 0) & (y > 0)
+            if mask.sum() >= 2:
+                m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
+                orders[col] = -m
+                ax.plot(
+                    x[mask], np.exp(b) * x[mask] ** m, "--", label=f"pend. ≈ {m:.2f}"
                 )
-                axes = axes.flatten()
+                ax.set_xscale("log")
+                ax.set_yscale("log")
+            else:
+                orders[col] = np.nan
 
-                for ax, col in zip(axes, subset):
-                    y_raw = df2[col].to_numpy(float)
-                    if isinstance(df2.index, pd.MultiIndex):
-                        x_raw = df2.index.get_level_values(x_label).to_numpy(float)
-                    else:
-                        x_raw = df2.index.to_numpy(float)
+            ax.set_xlabel(x_label)
+            ax.set_ylabel(f"{col} error")
+            ax.set_title(title_fmt.format(col=col, order=orders[col]))
+            ax.legend()
+            ax.grid(True, which="both", alpha=0.4)
+            fig.tight_layout()
 
-                    # Filtramos pares positivos; si quedan <2, no podemos log-ajustar
-                    pos_mask = (x_raw > 0) & (y_raw > 0)
-                    x_use, y_use = x_raw[pos_mask], y_raw[pos_mask]
-
-                    logscale_ok = x_use.size >= 2
-
-                    if logscale_ok:
-                        # Ajuste log–log
-                        slope, intercept = np.polyfit(np.log(x_use), np.log(y_use), 1)
-                        orders[col] = -slope
-
-                        ax.set_xscale("log")
-                        ax.set_yscale("log")
-                        ax.scatter(
-                            x_use,
-                            y_use,
-                            s=marker_size,
-                            zorder=3,
-                            label="datos",
-                        )
-                        if fit_line:
-                            ax.plot(
-                                x_use,
-                                np.exp(intercept) * x_use**slope,
-                                "--",
-                                alpha=0.9,
-                                label=f"ajuste  p≈{slope:.2f}",
-                            )
-                    else:
-                        # Escala lineal; anotamos la razón
-                        orders[col] = np.nan
-                        ax.scatter(
-                            x_raw,
-                            y_raw,
-                            s=marker_size,
-                            zorder=3,
-                            label="datos",
-                        )
-                        ax.text(
-                            0.5,
-                            0.5,
-                            "escala lineal\n(ceros o negativos)",
-                            transform=ax.transAxes,
-                            ha="center",
-                            va="center",
-                            fontsize=8,
-                            color="crimson",
-                        )
-
-                    ax.set_xlabel(x_label)
-                    ax.set_ylabel(f"{col}-error")
-                    ax.set_title(title_fmt.format(col=col, order=orders[col]))
-
-                    # Error mínimo de la serie (en la escala actual)
-                    ymin = y_raw.min()
-                    ax.annotate(
-                        f"min = {ymin:.2e}",
-                        xy=(x_raw[-1], ymin),
-                        xytext=(3, -12),
-                        textcoords="offset points",
-                        ha="left",
-                        va="top",
-                        fontsize=8,
-                    )
-
-                    ax.grid(True, which="both", linewidth=0.4, alpha=0.5)
-
-                # Quita paneles vacíos
-                for ax in axes[len(subset) :]:
-                    fig.delaxes(ax)
-
-                namer = FileNamer(
-                    file_name=f"{file_stem}_page{page}",
-                    folder_name=save_dir.name,
-                    path_name=str(save_dir.parent),
-                    mode="pdf",
-                )
-                fig.savefig(namer.file)  # PDF vectorial
-                # fig.savefig(namer.file.with_suffix(".png"))  # PNG rápido
-                plt.close(fig)
+            fig.savefig(save_dir / f"{file_stem}_{col}.png", dpi=dpi)
+            plt.close(fig)
 
         return orders
 
