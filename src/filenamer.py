@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Callable, Literal
 from firedrake import *
+from firedrake.petsc import OptionsManager
 from firedrake.checkpointing import CheckpointFile
 
 
@@ -30,6 +31,12 @@ class FileNamer:
         self.path_name = path_name if path_name else os.getcwd()
         self.mode = mode
         self.file = self._create_unique_path()
+
+        # Log Time initialisation
+        self._log_txt = Path(self.file).with_suffix("").as_posix() + "_log.txt"
+        PETSc.Options().setValue("log_view", f":{self._log_txt}")
+        if "log_view" not in OptionsManager.commandline_options:
+            PETSc.Log.begin()
 
         # if self.mode not in self.extensions.values():
         #     raise Exception("Invalid mode.")
