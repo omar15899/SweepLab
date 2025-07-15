@@ -188,9 +188,13 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # We store the solvers
         self.solvers = []
 
+        # We now instantiate also de residual of the original collocation problem
+        # in order to study the convergence of the sweeps.
+        R_coll = 0
+        w = TestFunction(self.W)
+
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
-            # v_m = v[m]
             v_m = TestFunction(
                 self.V
             )  # WHY WE HAVE TO CREATE THE FUNCTION OVER THE SUBSPACE V?
@@ -209,15 +213,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             right = inner(self.u_0.subfunctions[m], v_m)
             for j in range(self.M):
                 coeff = Q[m, j] - self.scale * Q_D[m, j]
-                right += (
-                    deltat
-                    * coeff
-                    * f(
-                        t0 + tau[j] * deltat,
-                        self.u_k_prev.subfunctions[j],
-                        v_m,
-                    )
+                f_value = f(
+                    t0 + tau[j] * deltat,
+                    self.u_k_prev.subfunctions[j],
+                    v_m,
                 )
+
+                right += deltat * coeff * f_value
+
             right = right * dx
 
             # Define the functional for that specific node
@@ -242,6 +245,18 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 )
             )
 
+            # We deal with collocation problem:
+            R_node_expr = inner(u_m - self.u_0.subfunctions[m], w[m])
+            for j in range(self.M):
+                R_node_expr -= (
+                    deltat
+                    * Q[m, j]
+                    * f(t0 + tau[j] * deltat, self.u_k_act.subfunctions[j], w[m])
+                )
+            R_coll += R_node_expr * dx
+
+        self.R_coll = R_coll
+
     def _setup_paralell_solver_global(self):
         """
         Here we use the accumulated residual over W
@@ -253,7 +268,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         u_0 = self.u_0
         u_k_prev = self.u_k_prev
         u_k_act = self.u_k_act
-        f = self.f
+        f = self.PDEs.f
         # We store the solvers
         self.solvers = []
         # Instantiate general residual functional
@@ -330,7 +345,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             self.scale.assign(1.0)
                         self.u_k_prev.assign(self.u_k_act)
                         r_as = assemble(self.R_m).riesz_representation()
-                        print(norm(r_as))
+                        print(f"Sweep residual norm: {norm(r_as)}")
+                        res0 = assemble(self.R_coll).riesz_representation()
+                        print(f"Initial collocation residual = {norm(res0)}")
                         for s in self.solvers:
                             s.solve()
                     last = self.u_k_act.subfunctions[-1]
@@ -338,6 +355,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     afile.save_function(
                         last, idx=step, timestepping_info={"time": float(t)}
                     )
+                    print()
                     for sub in (
                         *self.u_k_act.subfunctions,
                         *self.u_k_prev.subfunctions,
