@@ -69,7 +69,6 @@ analyser.temporal_error_convergence(
 )
 
 # SWEEP CONVERGENCE STUDY
-# for dt_ref in (1e-1, 1e-2, 1e-3, 1e-4, 1e-5):
 N_REF = 400
 DT_REF = 1e-1
 for dt in (1e-1, 1e-2, 1e-3, 1e-4, 1e-5):

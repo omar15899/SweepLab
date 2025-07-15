@@ -55,7 +55,7 @@ def solve_heat_pde1(
         dt=dt,
         prectype=prectype,
         file_name=file_name,
-        folder_name=f"HE_{time_str}",
+        folder_name=f"HE5_{time_str}",
         path_name=(
             "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/"
             "programming/solver/tests/heatfiles"
@@ -77,7 +77,7 @@ SWEEPS = [4]
 DEGREE = [4]
 
 
-TFINAL = 0.5
+TFINAL = 0.1
 M = 4
 
 for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):

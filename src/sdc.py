@@ -90,6 +90,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # Instantiate boundary conditions and test functions:
         self.bcs = self._define_node_time_boundary_setup()
 
+        self.R_m = None
+
         # Define the actual functions, if we want to retrieve
         # the list of functions for each coordinate use split.
         self.u_0 = Function(self.W, name="u_0")
@@ -221,6 +223,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             # Define the functional for that specific node
             Rm = left - right
 
+            self.R_m = Rm
+
             # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
             problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs)
             self.solvers.append(
@@ -290,6 +294,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             # Add to general residual functional
             Rm += left - right
 
+        self.R_m = Rm
+
         # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
         problem_m = NonlinearVariationalProblem(
             Rm, u_k_act, bcs=self.boundary_conditions
@@ -323,6 +329,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         else:
                             self.scale.assign(1.0)
                         self.u_k_prev.assign(self.u_k_act)
+                        r_as = assemble(self.R_m).riesz_representation()
+                        print(norm(r_as))
                         for s in self.solvers:
                             s.solve()
                     last = self.u_k_act.subfunctions[-1]
@@ -370,7 +378,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 if self.PDEs.time_dependent_constants_bts:
                     for ct in self.PDEs.time_dependent_constants_bts:
                         ct.assign(t)
-                print(f"step: {step}, time = {t}")
+                # print(f"step: {step}, time = {t}")
                 step += 1
 
         return step - 1 if self.mode != "vtk" else None
