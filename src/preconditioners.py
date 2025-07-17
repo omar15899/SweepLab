@@ -1,14 +1,17 @@
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Literal
 import numpy as np
-from FIAT.quadrature import GaussLobattoLegendreQuadratureLineRule
+from FIAT.quadrature import (
+    GaussLobattoLegendreQuadratureLineRule,
+    RadauQuadratureLineRule,
+)
 from FIAT.reference_element import DefaultLine
 
 
 @dataclass
 class SDCPreconditioners:
     M: float
-    prectype: int | str = 0
+    prectype: int | Literal["lobatto", "radau-left", "radau-right"] = "radau-right"
     tau: np.ndarray | None = None
     """
     Optional to use a personal quadrature rule, I have to add more options to 
@@ -19,10 +22,21 @@ class SDCPreconditioners:
 
         if self.tau is None:
             # Calculate collocation nodes in [-1,1] (main parameter in collocation problem)
-            gll_rule = GaussLobattoLegendreQuadratureLineRule(DefaultLine(), self.M)
+            if self.prectype == "lobatto":
+                rule = GaussLobattoLegendreQuadratureLineRule(DefaultLine(), self.M)
+
+            elif self.prectype == "radau-left":
+                # Includes the extreme x = −1  ->  tau = 0
+                rule = RadauQuadratureLineRule(DefaultLine(), self.M, right=False)
+
+            elif self.prectype == "radau-right":
+                # Includes the extreme x = 1  ->  tau = 1
+                rule = RadauQuadratureLineRule(DefaultLine(), self.M, right=True)
+            else:
+                raise ValueError(f"Unknown quadrature: {self.prectype!r}")
 
             self.tau = 0.5 * (
-                np.asarray(gll_rule.get_points()).flatten() + 1.0
+                np.asarray(rule.get_points()).flatten() + 1.0
             )  # Change to [0,1]
 
         # INstantiate the collocation matrix and the Q_Delta
