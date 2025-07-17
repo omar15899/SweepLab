@@ -90,7 +90,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # Instantiate boundary conditions and test functions:
         self.bcs = self._define_node_time_boundary_setup()
 
-        self.R_m = None
+        self.R_m = []
 
         # Define the actual functions, if we want to retrieve
         # the list of functions for each coordinate use split.
@@ -226,7 +226,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             # Define the functional for that specific node
             Rm = left - right
 
-            self.R_m = Rm
+            self.R_m.append(Rm)
 
             # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
             problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs)
@@ -269,15 +269,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         u_k_prev = self.u_k_prev
         u_k_act = self.u_k_act
         f = self.PDEs.f
-        # We store the solvers
-        self.solvers = []
-        # Instantiate general residual functional
-        v = self.v
+
+        v = TestFunction(self.W)
         u_k_act_tup = split(u_k_act)
         Rm = 0
 
         Q = self.Q
         Q_D = self.Q_D
+        R_coll = 0
+
+        self.solvers = []
 
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
@@ -309,12 +310,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             # Add to general residual functional
             Rm += left - right
 
+            # We deal with collocation problem:
+            R_node_expr = inner(u_m - self.u_0.subfunctions[m], v_m)
+            for j in range(self.M):
+                R_node_expr -= (
+                    deltat * Q[m, j] * f(t0 + tau[j] * deltat, u_k_act_tup[j], v_m)
+                )
+            R_coll += R_node_expr * dx
+
         self.R_m = Rm
+        self.R_coll = R_coll
 
         # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-        problem_m = NonlinearVariationalProblem(
-            Rm, u_k_act, bcs=self.boundary_conditions
-        )
+        problem_m = NonlinearVariationalProblem(Rm, u_k_act, bcs=self.bcs)
         self.solvers.append(
             NonlinearVariationalSolver(
                 problem_m,
@@ -343,13 +351,21 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             self.scale.assign(1.0 / k)
                         else:
                             self.scale.assign(1.0)
+
                         self.u_k_prev.assign(self.u_k_act)
-                        r_as = assemble(self.R_m).riesz_representation()
-                        print(f"Sweep residual norm: {norm(r_as)}")
+
+                        r_as = (
+                            (assemble(Rm).riesz_representation() for Rm in self.R_m)
+                            if self.is_local
+                            else (assemble(self.R_m).riesz_representation(),)
+                        )
+                        print(f"Sweep residual norm: {sum(norm(r) for r in r_as)}")
                         res0 = assemble(self.R_coll).riesz_representation()
                         print(f"Initial collocation residual = {norm(res0)}")
+
                         for s in self.solvers:
                             s.solve()
+
                     last = self.u_k_act.subfunctions[-1]
                     last.rename("u")
                     afile.save_function(
