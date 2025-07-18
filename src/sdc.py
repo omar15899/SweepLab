@@ -1,6 +1,8 @@
 from typing import Iterable, Literal
 from pathlib import Path
+import json
 import numpy as np
+import pandas as pd
 from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
@@ -381,6 +383,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         t, step = 0.0, 0
 
+        convergence_results = {}
+
         if real_solution_exp is not None:
             real_u = Function(self.W)
             for u in real_u.subfunctions:
@@ -408,14 +412,20 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         print(f"step: {step}, time = {t}")
                         print("-------------------------------------------------")
                         # RESIDUAL ERRORS
-                        r_as = (
+                        residual_sweep = (
                             (assemble(Rm).riesz_representation() for Rm in self.R_sweep)
                             if self.is_local
                             else (assemble(self.R_sweep).riesz_representation(),)
                         )
-                        print(f"Sweep residual norm: {sum(norm(r) for r in r_as)}")
-                        res0 = assemble(self.R_coll).riesz_representation()
-                        print(f"Initial collocation residual = {norm(res0)}")
+                        total_residual_sweep = sum(norm(r) for r in residual_sweep)
+                        print(f"Sweep residual norm: {total_residual_sweep}")
+                        residual_collocation = assemble(
+                            self.R_coll
+                        ).riesz_representation()
+                        total_residual_collocation = norm(residual_collocation)
+                        print(
+                            f"Initial collocation residual = {total_residual_collocation}"
+                        )
 
                         for s in self.sweep_solvers:
                             s.solve()
@@ -453,6 +463,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         )
 
                         print("\n\n\n")
+                        convergence_results[f"{step},{t},{k}"] = [
+                            total_residual_collocation,
+                            total_residual_sweep,
+                            sweep_vs_collocation_errornorm,
+                            sweep_vs_real_errornorm,
+                            collocation_vs_real_errornorm,
+                        ]
+
                         #############################################
                         #############################################
                         #############################################
@@ -476,6 +494,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             ct.assign(t)
                     step += 1
 
+                convergence_results_path = (
+                    Path(self.file).with_suffix("").as_posix()
+                    + "_convergence_results.json"
+                )
+                with open(str(convergence_results_path), "w") as f:
+                    json.dump(convergence_results, f, indent=2)
                 return step - 1
 
         else:
