@@ -11,8 +11,10 @@ from FIAT.reference_element import DefaultLine
 @dataclass
 class SDCPreconditioners:
     M: float
-    prectype: int | Literal["lobatto", "radau-left", "radau-right"] = "radau-right"
+    prectype: int | str = "MIN-SR-FLEX"
     tau: np.ndarray | None = None
+    tau_type: Literal["lobatto", "radau-left", "radau-right"] | None = "radau-right"
+
     """
     Optional to use a personal quadrature rule, I have to add more options to 
     the Gauss Lobatto one
@@ -22,18 +24,18 @@ class SDCPreconditioners:
 
         if self.tau is None:
             # Calculate collocation nodes in [-1,1] (main parameter in collocation problem)
-            if self.prectype == "lobatto":
+            if self.tau_type == "lobatto":
                 rule = GaussLobattoLegendreQuadratureLineRule(DefaultLine(), self.M)
 
-            elif self.prectype == "radau-left":
+            elif self.tau_type == "radau-left":
                 # Includes the extreme x = −1  ->  tau = 0
                 rule = RadauQuadratureLineRule(DefaultLine(), self.M, right=False)
 
-            elif self.prectype == "radau-right":
+            elif self.tau_type == "radau-right":
                 # Includes the extreme x = 1  ->  tau = 1
                 rule = RadauQuadratureLineRule(DefaultLine(), self.M, right=True)
             else:
-                raise ValueError(f"Unknown quadrature: {self.prectype!r}")
+                raise ValueError(f"Unknown quadrature: {self.tau_type!r}")
 
             self.tau = 0.5 * (
                 np.asarray(rule.get_points()).flatten() + 1.0
