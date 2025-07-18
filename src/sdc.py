@@ -196,53 +196,34 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         return tuple(bcs)
 
     def _setup_full_collocation(self):
-        deltat = self.deltat
-        tau = self.tau
-        t0 = self.t_0_subinterval
-        f = self.PDEs.f
+        deltat, tau, t0, f = self.deltat, self.tau, self.t_0_subinterval, self.PDEs.f
         Q = self.Q
+        w = TestFunction(self.W)
         # We could use the mixed space but it's nonsense, as we don't have coupling
         # among the different finite element subspaces.
         # We store the solvers
-        self.sweep_solvers = []
-
-        # We now instantiate also de residual of the original collocation problem
-        # in order to study the convergence of the sweeps.
+        u_c = self.u_collocation
+        u0_c = self.u_0_collocation
+        u_c_split = split(u_c)
+        u0_c_split = split(u0_c)
         R_coll = 0
-        w = TestFunction(self.W)
-
         for m in range(self.M):
-
-            # We deal with collocation problem:
-            R_node_expr = inner(
-                self.u_collocation.subfunctions[m]
-                - self.u_0_collocation.subfunctions[m],
-                w[m],
-            )
+            Rm = inner(u_c_split[m] - u0_c_split[m], w[m])
             for j in range(self.M):
-                R_node_expr -= (
-                    deltat
-                    * Q[m, j]
-                    * f(t0 + tau[j] * deltat, self.u_collocation.subfunctions[j], w[m])
-                )
-            R_coll += R_node_expr * dx
+                Rm -= deltat * Q[m, j] * f(t0 + tau[j] * deltat, u_c_split[j], w[m])
+            R_coll += Rm * dx
 
-        collocation_problem = NonlinearVariationalProblem(
-            R_coll, self.u_collocation, bcs=self.bcs
-        )
-        self.R_coll = R_coll
-        self.collocation_solver = NonlinearVariationalSolver(
-            collocation_problem,
-            solver_parameters=(
-                {
+            problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
+            self.R_coll = R_coll
+            self.collocation_solver = NonlinearVariationalSolver(
+                problem,
+                solver_parameters=self.solver_parameters
+                or {
                     "snes_type": "newtonls",
                     "snes_rtol": 1e-8,
                     "ksp_type": "cg",
-                }
-                if not self.solver_parameters
-                else self.solver_parameters
-            ),
-        )
+                },
+            )
 
     def _setup_paralell_solver_local(self):
         """
@@ -424,7 +405,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         #############################################
                         ############### Measuring errors ###############
                         #############################################
-
+                        print(f"step: {step}, time = {t}")
+                        print("-------------------------------------------------")
                         # RESIDUAL ERRORS
                         r_as = (
                             (assemble(Rm).riesz_representation() for Rm in self.R_sweep)
@@ -440,7 +422,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                         # ERROR SWEEP SOLUTION VS COLLOCATION ERROR VS SWEEP ERROR
                         sweep_vs_collocation_errornorm = errornorm(
-                            self.collocation.subfunctions[-1],
+                            self.u_collocation.subfunctions[-1],
                             self.u_k_act.subfunctions[-1],
                             norm_type="L2",
                         )
@@ -458,7 +440,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         )
 
                         collocation_vs_real_errornorm = errornorm(
-                            self.collocation.subfunctions[-1], real_u.subfunctions[-1]
+                            self.u_collocation.subfunctions[-1],
+                            real_u.subfunctions[-1],
                         )
 
                         print(
@@ -468,6 +451,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         print(
                             f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
                         )
+
+                        print("\n\n\n")
                         #############################################
                         #############################################
                         #############################################
@@ -489,7 +474,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     if self.PDEs.time_dependent_constants_bts:
                         for ct in self.PDEs.time_dependent_constants_bts:
                             ct.assign(t)
-                    print(f"step: {step}, time = {t}")
                     step += 1
 
                 return step - 1
