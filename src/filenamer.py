@@ -142,12 +142,17 @@ class CheckpointAnalyser:
         if not self.checkpoint_list:
             raise Exception("No files to explore.")
         # create a list of the convergence results Path objects
-        self.json_list = [file.with_suffix("").as_posix() + "_convergence_results.json" for file in self.checkpoint_list]
-        self.convergence_sweep_results = [self.load_df_from_json(json_path) for json_path in self.json_list] if self.json_list else None
-        
-        self._mesh = None
+        self.json_list = [
+            file.with_suffix("").as_posix() + "_convergence_results.json"
+            for file in self.checkpoint_list
+        ]
+        self.convergence_sweep_results = (
+            [self.load_df_from_json(json_path) for json_path in self.json_list]
+            if self.json_list
+            else None
+        )
 
-        
+        self._mesh = None
 
         if get_function_characteristics and self.checkpoint_list:
             self.mesh, self.V, self.t_end, self.idx, self.f_approx = (
@@ -206,21 +211,29 @@ class CheckpointAnalyser:
             t_end = hist["time"][-1]
             func = file.load_function(mesh, function_name, idx=idx)
         return mesh, hist, t_end, idx, func
-    
+
     def load_df_from_json(self, filepath: Path):
-        with open(str(filepath), "r") as f: 
-            data = json.load(f)
-        
-        
-        data.keys() = map(CheckpointAnalyser.split_convergence_results_json_keys(), data.keys())
-        return pd.DataFrame.from_dict(data, orient="index")
-        
-        
+        # with open(str(filepath), "r") as f:
+        #     data = json.load(f)
+
+        # data.keys() = map(CheckpointAnalyser.split_convergence_results_json_keys(), data.keys())
+        # return pd.DataFrame.from_dict(data, orient="index")
+
+        df = pd.read_json(str(filepath), orient="index")
+        tuples = [
+            CheckpointAnalyser.split_convergence_results_json_keys(key)
+            for key in df.index
+        ]
+
+        df.index = pd.MultiIndex.from_tuples(tuples, names=["step", "time", "k"])
+
+        return df
+
     @staticmethod
     def split_convergence_results_json_keys(key):
         step, time, k = key.split(",")
         return (int(step), float(time), int(k))
-    
+
     @staticmethod
     def load_multiple_functions_from_checkpoint(
         filepath: Path,
