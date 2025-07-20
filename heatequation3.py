@@ -14,8 +14,10 @@ def solve_heat_pde1(
     nsweeps,
     M,
     Tfinal,
+    is_local=True,
     prectype="MIN-SR-FLEX",
     degree=4,
+    full_collocation=False,
 ):
 
     dt_str = f"{dt:.0e}"
@@ -23,19 +25,21 @@ def solve_heat_pde1(
     file_name = f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}_nodes{M}_degreepol{degree}_prectype{prectype}_tfinal{Tfinal}"
 
     mesh = IntervalMesh(n_cells, length_or_left=0, right=1)
-    x = SpatialCoordinate(mesh)[0]
+    x = SpatialCoordinate(mesh)
 
     V = FunctionSpace(mesh, "CG", degree=degree)
 
-    u_exact = lambda t: sin(pi * x) * exp(x * t)
-    f_obtained = lambda t: (x + pi**2 - t**2) * sin(pi * x) * exp(
-        x * t
-    ) - 2 * pi * t * cos(pi * x) * exp(x * t)
+    u_exact = lambda x, t: sin(pi * x[0]) * exp(x * t)
+    f_obtained = lambda t: (x[0] + pi**2 - t**2) * sin(pi * x[0]) * exp(
+        x[0] * t
+    ) - 2 * pi * t * cos(pi * x[0]) * exp(x[0] * t)
 
     def f_heat(t, u, v):
+        # return -inner(grad(u), grad(v))
+        # return v
         return -inner(grad(u), grad(v)) + f_obtained(t) * v
 
-    u0 = Function(V, name="u0").interpolate(u_exact(0.0))
+    u0 = Function(V, name="u0").interpolate(u_exact(x, 0.0))
     bc = DirichletBC(V, Constant(0.0), "on_boundary")
 
     pde = PDESystem(
@@ -53,6 +57,7 @@ def solve_heat_pde1(
         PDEs=pde,
         M=M,
         dt=dt,
+        is_local=is_local,
         prectype=prectype,
         file_name=file_name,
         folder_name=f"HE5_{time_str}",
@@ -60,9 +65,10 @@ def solve_heat_pde1(
             "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/"
             "programming/solver/tests/heatfiles"
         ),
+        full_collocation=full_collocation,
     )
 
-    solver.solve(Tfinal, nsweeps)
+    solver.solve(Tfinal, nsweeps, u_exact)
 
 
 # N_CELLS = [1, 4, 8, 16, 25, 50, 100, 200, 400, 800]
@@ -72,12 +78,12 @@ def solve_heat_pde1(
 
 
 N_CELLS = [10]
-DT_LIST = [1e-2]
+DT_LIST = [1e-4]
 SWEEPS = [4]
 DEGREE = [4]
 
 
-TFINAL = 0.1
+TFINAL = 0.001
 M = 4
 
 for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
@@ -87,8 +93,10 @@ for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
         nsweeps=sw,
         M=M,
         Tfinal=TFINAL,
+        is_local=False,
         prectype="MIN-SR-FLEX",
         degree=deg,
+        full_collocation=True,
     )
 
 

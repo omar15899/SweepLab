@@ -142,12 +142,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.t_0_subinterval = Constant(0.0)
         self.scale = Constant(1.0)
         (
-            self._setup_paralell_solver_local()
+            self._setup_paralell_sweep_solver()
             if is_local
-            else self._setup_paralell_solver_global()
+            else self._setup_global_sweep_solver()
         )
 
-        self._setup_full_collocation() if self.full_collocation else None
+        self._setup_full_collocation_solver() if self.full_collocation else None
 
     def _define_node_time_boundary_setup(self):
         """
@@ -197,7 +197,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         return tuple(bcs)
 
-    def _setup_full_collocation(self):
+    def _setup_full_collocation_solver(self):
         deltat, tau, t0, f = self.deltat, self.tau, self.t_0_subinterval, self.PDEs.f
         Q = self.Q
         w = TestFunction(self.W)
@@ -215,8 +215,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 Rm -= deltat * Q[m, j] * f(t0 + tau[j] * deltat, u_c_split[j], w[m])
             R_coll += Rm * dx
 
-            problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
             self.R_coll = R_coll
+
+            problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
             self.collocation_solver = NonlinearVariationalSolver(
                 problem,
                 solver_parameters=self.solver_parameters
@@ -227,7 +228,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 },
             )
 
-    def _setup_paralell_solver_local(self):
+    def _setup_paralell_sweep_solver(self):
         """
         Compute the solvers:
 
@@ -302,9 +303,18 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 )
             )
 
-    def _setup_paralell_solver_global(self):
+    def _setup_upper_triangular_sweep_solver(self):
+        pass
+
+    def _setup_lower_triangular_sweep_solver(self):
+        pass
+
+    def _setup_global_sweep_solver(self):
         """
-        Here we use the accumulated residual over W
+        Here we use the accumulated residual over W. This is
+        a global solver, meaning that can accept any kind of
+        preconditioner. But please be aware that it wont calculate
+        the optimal
         """
 
         deltat = self.deltat
@@ -410,7 +420,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         ############### Measuring errors ###############
                         #############################################
                         print(f"step: {step}, time = {t}")
-                        print("-------------------------------------------------")
+                        # print("-------------------------------------------------")
                         # RESIDUAL ERRORS
                         residual_sweep = (
                             (assemble(Rm).riesz_representation() for Rm in self.R_sweep)
@@ -418,14 +428,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             else (assemble(self.R_sweep).riesz_representation(),)
                         )
                         total_residual_sweep = sum(norm(r) for r in residual_sweep)
-                        print(f"Sweep residual norm: {total_residual_sweep}")
+                        # print(f"Sweep residual norm: {total_residual_sweep}")
                         residual_collocation = assemble(
                             self.R_coll
                         ).riesz_representation()
                         total_residual_collocation = norm(residual_collocation)
-                        print(
-                            f"Initial collocation residual = {total_residual_collocation}"
-                        )
+                        # print(
+                        # f"Initial collocation residual = {total_residual_collocation}"
+                        # )
 
                         for s in self.sweep_solvers:
                             s.solve()
@@ -454,15 +464,15 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             real_u.subfunctions[-1],
                         )
 
-                        print(
-                            f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
-                        )
+                        # print(
+                        #     f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
+                        # )
                         print(f"Sweep vs real error norm: {sweep_vs_real_errornorm}")
-                        print(
-                            f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
-                        )
+                        # print(
+                        #     f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
+                        # )
+                        print("\n")
 
-                        print("\n\n\n")
                         convergence_results[f"{step},{t},{k}"] = [
                             total_residual_collocation,
                             total_residual_sweep,
@@ -474,6 +484,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         #############################################
                         #############################################
                         #############################################
+
+                    print("\n\n\n")
 
                     u_last_node = self.u_k_act.subfunctions[-1]
                     u_last_node.rename("u")

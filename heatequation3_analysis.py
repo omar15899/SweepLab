@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 from itertools import product
 
+
 from firedrake import SpatialCoordinate, sin, cos, exp, pi, UnitIntervalMesh
 from src.analysis import ConvergenceAnalyser
 

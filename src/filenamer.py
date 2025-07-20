@@ -142,15 +142,15 @@ class CheckpointAnalyser:
         if not self.checkpoint_list:
             raise Exception("No files to explore.")
         # create a list of the convergence results Path objects
-        self.json_list = [
-            file.with_suffix("").as_posix() + "_convergence_results.json"
-            for file in self.checkpoint_list
-        ]
-        self.convergence_sweep_results = (
-            [self.load_df_from_json(json_path) for json_path in self.json_list]
-            if self.json_list
-            else None
-        )
+        # self.json_list = [
+        #     file[0].with_suffix("").as_posix() + "_convergence_results.json"
+        #     for file in self.checkpoint_list.values()
+        # ]
+        # self.convergence_sweep_results = (
+        #     [self.load_df_from_json(json_path) for json_path in self.json_list]
+        #     if self.json_list
+        #     else None
+        # )
 
         self._mesh = None
 
