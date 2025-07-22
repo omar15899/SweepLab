@@ -1,4 +1,4 @@
-from typing import Iterable, Literal
+from typing import Iterable, Literal, List
 from pathlib import Path
 import json
 import numpy as np
@@ -22,7 +22,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         M: int = 4,
         N: int = 1,
         dt: int | float = 1e-3,
-        is_local: bool = True,
+        is_parallel: bool = True,
         solver_parameters: dict | None = None,
         prectype: int | str = 0,
         tau: np.ndarray | None = None,
@@ -70,7 +70,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.mesh = mesh
         self.PDEs = PDEs
         self.deltat = dt
-        self.is_local = is_local
+        self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
         self.N = N
         self.full_collocation = full_collocation
@@ -104,6 +104,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.u_k_prev = Function(self.W, name="u_k")
         self.u_k_act = Function(self.W, name="u_{k+1}")
 
+        # In order to compare the collocation problem with the solutions,
+        # we need to create
         self.u_0_collocation = Function(self.W, name="u_0 collocation")
         self.u_collocation = Function(self.W, name="u_collocation")
 
@@ -143,7 +145,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.scale = Constant(1.0)
         (
             self._setup_paralell_sweep_solver()
-            if is_local
+            if is_parallel
             else self._setup_global_sweep_solver()
         )
 
@@ -160,7 +162,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         if not self.PDEs.boundary_conditions:
             return []
 
-        if self.is_local:
+        if self.is_parallel:
             return tuple(self.PDEs.boundary_conditions)
 
         bcs = []
@@ -245,11 +247,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # among the different finite element subspaces.
         # We store the solvers
         self.sweep_solvers = []
+        self.R_sweep = []
 
         # We now instantiate also de residual of the original collocation problem
         # in order to study the convergence of the sweeps.
         R_coll = 0
-        w = TestFunction(self.W)
 
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
@@ -334,6 +336,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         R_coll = 0
 
         self.sweep_solvers = []
+        self.R_sweep = []
 
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
@@ -391,12 +394,30 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         are going to be the coordinates OBJECT over the mesh.
         """
 
+        def _update_exact_field(t_now):
+            """
+            interpolates the exact solution over all of the subtime intervals
+            tau defined in the collocation problem.
+            """
+            if real_solution_exp is None:
+                return
+            x = self.PDEs.coord
+            for m, ru in enumerate(real_u.subfunctions):
+                local_t = t_now + self.tau[m] * self.deltat
+                ru.interpolate(real_solution_exp(x, local_t))
+
+        def compound_norm(u: Function, v: Function):
+            return sum(
+                errornorm(u_k, v_k, norm_type="L2") ** 2
+                for u_k, v_k in zip(u.subfunctions, v.subfunctions)
+            )
+
         t, step = 0.0, 0
 
         convergence_results = {}
 
         if real_solution_exp is not None:
-            real_u = Function(self.W)
+            real_u = Function(self.W, name="u_exact")
             for u in real_u.subfunctions:
                 u.interpolate(real_solution_exp(SpatialCoordinate(self.W.mesh()), t))
 
@@ -405,9 +426,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 # Save the mesh
                 afile.save_mesh(self.mesh)
                 while t < T:
+                    err_intra = []
+                    _update_exact_field(t)
+                    # Solve the full collocation solver
                     self.collocation_solver.solve()
                     for u in self.u_0_collocation.subfunctions:
                         u.assign(self.u_collocation.subfunctions[-1])
+
+                    # Apply the sweep
                     for k in range(1, sweeps + 1):
                         if self.prectype == "MIN-SR-FLEX":
                             self.scale.assign(1.0 / k)
@@ -419,12 +445,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         #############################################
                         ############### Measuring errors ###############
                         #############################################
-                        print(f"step: {step}, time = {t}")
+                        # print(f"step: {step}, time = {t}")
                         # print("-------------------------------------------------")
                         # RESIDUAL ERRORS
                         residual_sweep = (
                             (assemble(Rm).riesz_representation() for Rm in self.R_sweep)
-                            if self.is_local
+                            if self.is_parallel
                             else (assemble(self.R_sweep).riesz_representation(),)
                         )
                         total_residual_sweep = sum(norm(r) for r in residual_sweep)
@@ -464,14 +490,20 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             real_u.subfunctions[-1],
                         )
 
+                        # err_intra.append(float(sweep_vs_collocation_errornorm))
+
+                        err_intra.append(
+                            float(compound_norm(self.u_collocation, self.u_k_act))
+                        )
+
                         # print(
                         #     f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
                         # )
-                        print(f"Sweep vs real error norm: {sweep_vs_real_errornorm}")
+                        # print(f"Sweep vs real error norm: {sweep_vs_real_errornorm}")
                         # print(
                         #     f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
                         # )
-                        print("\n")
+                        # print("\n")
 
                         convergence_results[f"{step},{t},{k}"] = [
                             total_residual_collocation,
@@ -485,7 +517,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         #############################################
                         #############################################
 
-                    print("\n\n\n")
+                    print(f"step {step}  t={t:.4e}  err_intra={err_intra}")
+                    # print("\n\n\n")
 
                     u_last_node = self.u_k_act.subfunctions[-1]
                     u_last_node.rename("u")
