@@ -72,7 +72,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.deltat = dt
         self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
-        self.N = N
         self.full_collocation = full_collocation
 
         # Dealing with the whole system of pdes
@@ -157,41 +156,72 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         MixedFunctionSpace, we have a lot of tests in
         boundary_conditions.py. Also have a look to my notes
         in Notability.
+
+        1. Firedrake flattens any nested MixedFunctionSpaces, so
+            at the end what we always have with the subspaces atribute
+            is that gives us an iterator with the flattened result
+            (FunctionSpace, VectorFunctionSpace, FunctionSpace, FunctionSpace...)
+            but inside this iterable we wont find MixedFunctionSpaces.
+            The value_size attr will give the whole dimension of the MixedFS.
+            For instance if the previous tupple has dimensions (1, 4, 1, 1)
+            respectively value_size will be 7
+        2. Now, to deal with the VectorFunctionSpaces (they are like MixedFunctionSpaces
+            but in contiguous memory space) is a little different, as
+            VectorFunctions will have always len() = 1 subspaces iterable.
+            Also it does not accept a nested VFS over other VFS, it must be
+            seen as an individual FunctionSpace.
+        3. Based on the structure of our code, there's no possible BC defined
+            over the whole MFS, as the later is created within the PDESystem
+            class, so the user is not allowed to define any bc over self.W,
+            and thus we can ignore this case in the code.
+
+        +. No matter if in _setup_paralell_sweep_solver we are working with
+            self.V test,
+
+
         """
 
-        if not self.PDEs.boundary_conditions:
+        if not self.PDEs.bcs:
             return []
 
-        if self.is_parallel:
-            return tuple(self.PDEs.boundary_conditions)
+        # if self.is_parallel:
+        #     return list(self.PDEs.boundary_conditions)
 
         bcs = []
-        for bc in self.PDEs.boundary_conditions:
+        for bc in self.PDEs.bcs:
             if isinstance(bc, DirichletBC):
+                # First, we need to retrieve the index of the subspace
+                # for which the boundary condition acts
+                # and, if it is a VFS, the sub_idx. We use the
+                # internal attribute _indices in order to retrieve both of
+                # them in the second case. To characterise the VFS we know
+                # that it's value_shape attribute will have a.l 1 parameter.
+                ## CAN WE HAVE A 1D VECTORFUNCTIONSPACE? HOW CAN I CHARACTERISE
+                # A VECTORFUNCTIONSPACE
                 bc_function_space = (
                     bc.function_space()
-                )  # it gives us the subsubspace in which vs is defined.
-                idx = (
-                    bc_function_space.index
-                    if bc_function_space.index is not None
-                    else 0
-                )
-                component = getattr(bc_function_space, "component", None)
-                # is_function_space = isinstance(self.V.sub(idx), FunctionSpace)
-
-                for n in range(self.N):
-                    subspace = self.W.sub(idx + n * self.lenV)
-                    # As Firedrake flattens the MixedFunctionSpace,
-                    # we cannot have another MixedFunctionSpace nested!
-                    bcs.append(
-                        bc.reconstruct(
-                            V=(
-                                subspace
-                                if component is None
-                                else subspace.sub(component)
-                            )
+                )  # it gives us the subspace in which vs is defined.
+                idx, sub_idx = (
+                    (
+                        (
+                            (
+                                bc_function_space.index
+                                if bc_function_space.index is not None
+                                else 0
+                            ),
+                            None,
                         )
                     )
+                    if bc_function_space.value_shape == ()
+                    else (*bc._indices, None)[:2]
+                )
+
+                for m_node in range(self.M):
+                    subspace = self.W.sub(idx + m_node * self.lenV)
+                    subspace = subspace if sub_idx is None else subspace.sub(sub_idx)
+                    # As Firedrake flattens the MixedFunctionSpace,
+                    # we cannot have another MixedFunctionSpace nested!
+                    bcs.append(bc.reconstruct(V=(subspace)))
             elif isinstance(bc, EquationBC):
                 pass
             else:
@@ -232,9 +262,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     def _setup_paralell_sweep_solver(self):
         """
-        Compute the solvers:
+        Compute the solvers for the parallel case.
 
-        Needs to work for:
+        + IMPORTANT: We create the test function over V because each
+        subfunction of W has as function_space() attribute which
+        points to the subspace of W where the basis of the function
+        is defined. As there's no coupled systems, we just need to
+        work with the basis of that finite_element space, ignoring
+        the rest of W.
 
         """
         deltat = self.deltat
@@ -255,12 +290,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         for m in range(self.M):
             # As in my notes, each test function is independemt from the rest
-            v_m = TestFunction(
-                self.V
-            )  # WHY WE HAVE TO CREATE THE FUNCTION OVER THE SUBSPACE V?
-            # IS IT BECAUSE W IS FORMED BY DIFFERENT INDEPENDENT FINITE ELEMENT CELLS (ON A SAME CELL, M DIFFERENT AND INDEPENDENT FINITE ELEMENTS DEFINED)?
-            # retrieve m-coordinate of the vector function
             u_m = self.u_k_act.subfunctions[m]
+            v_m = TestFunction(u_m.function_space())
 
             #  assemble the part with u^{k+1}. We have to be very carefull as
             # v_m will be included in the function f.
@@ -496,9 +527,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             float(compound_norm(self.u_collocation, self.u_k_act))
                         )
 
-                        # print(
-                        #     f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
-                        # )
+                        print(
+                            f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
+                        )
                         # print(f"Sweep vs real error norm: {sweep_vs_real_errornorm}")
                         # print(
                         #     f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
