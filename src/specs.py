@@ -54,6 +54,26 @@ class PDESystem(object):
         as the initial conditions for each subspace.
 
     boundary_conditions: callable | Iterable[callable]
+
+
+    IMPORTANT:
+
+    1. Thanks to the way firedrake works and how mixedfunctionspaces are flattened and the
+        conceptual equivalence between VFS and FS, the way that we have to input the PDESystem
+        is:
+        a) mesh: Unique Mesh for all the system.
+        b) V: Or 1 FunctionSpace, or 1 VectorFunctionSpace or if several from the previous 2,
+            a MixedFunctionSpace.
+        c) coord: Unique parametrisation of the mesh
+        d) f: Just 1 if V is a 1 FunctionSpace or 1 VectorFunctionSpace (in this second case
+            it will have several subfunctions). In the complementary case (MFS), it needs to be
+            a list with 1 to 1 correspondence between each f (u / delta t = f(u, ...). without the
+            dx) and each subspace (either FunctionSpace or VectorFunctionSpace), impossible to be
+            a nested MixedFunctionSpace.
+        e) boundary conditions: A non sorted list with all of them. The program will automatically
+            handle it.
+        d) time_dependent_constants_bts: Same
+        e) name: Name of the general system.
     """
 
     mesh: Mesh
@@ -68,7 +88,7 @@ class PDESystem(object):
     def __post_init__(self):
         self._is_Mixed = len(self.V.subspaces) > 1
         # Define boundary conditions in an homogenieus way (always a list)
-        self.bcs = (
+        self.boundary_conditions = (
             (self.boundary_conditions,)
             if not isinstance(self.boundary_conditions, tuple)
             else self.boundary_conditions
