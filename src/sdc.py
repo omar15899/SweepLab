@@ -178,17 +178,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         +. No matter if in _setup_paralell_sweep_solver we are working with
             self.V test,
 
-
         """
 
-        if not self.PDEs.bcs:
+        if not self.PDEs.boundary_conditions:
             return []
 
         # if self.is_parallel:
         #     return list(self.PDEs.boundary_conditions)
 
         bcs = []
-        for bc in self.PDEs.bcs:
+        for bc in self.PDEs.boundary_conditions:
             if isinstance(bc, DirichletBC):
                 # First, we need to retrieve the index of the subspace
                 # for which the boundary condition acts
@@ -320,7 +319,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             self.R_sweep.append(R_sweep)
 
             # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs)
+            problem_m = NonlinearVariationalProblem(
+                R_sweep, u_m, bcs=self.PDEs.boundary_conditions
+            )
             self.sweep_solvers.append(
                 NonlinearVariationalSolver(
                     problem_m,
