@@ -1,18 +1,12 @@
 import re
 import gc
+import itertools
 from pathlib import Path
 from typing import List, Dict, Any
 from firedrake import *
 from .filenamer import FileNamer, CheckpointAnalyser
 import matplotlib.pyplot as plt
 import pandas as pd
-
-file_path = Path(
-    "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/tests/heatfiles/HE"
-)
-file_name = "heat_n"
-pattern = rf"{file_name}_n(?P<n>\d+)_dt(?P<dt>\d*(?:\d[eE]-\d+)?)_sw(?P<sw>\d+).*(?:_(?P<idx>\d+))?\.h5$"
-deg = 4
 
 
 class ConvergenceAnalyser(CheckpointAnalyser):
@@ -147,90 +141,165 @@ class ConvergenceAnalyser(CheckpointAnalyser):
 
     #     return orders
 
+    # def _plot_and_fit(
+    #     self,
+    #     df: pd.DataFrame,
+    #     x_label: str,
+    #     title: str,
+    #     save_dir: str = "figures",
+    #     file_stem: str | None = None,
+    #     dpi: int = 300,
+    # ) -> dict[str, float]:
+    #     """Return a convergence‑order dictionary and save a single log–log figure.
+
+    #     Parameters
+    #     ----------
+    #     df : pandas.DataFrame
+    #         Rows are indexed by the discretisation parameter named *x_label* (either as a
+    #         simple ``Index`` or as one level of a ``MultiIndex``).  Columns store error
+    #         measures to be analysed.
+    #     x_label : str
+    #         Name of the horizontal‑axis variable (e.g. ``"dt"``, ``"n"`` or ``"k"``).
+    #     title : str
+    #         Figure title.
+    #     save_dir : str, default ``"figures"``
+    #         Output directory (created on demand).
+    #     file_stem : str | None
+    #         Stem of the PNG filename.  If ``None`` a name derived from *x_label* is used.
+    #     dpi : int, default 300
+    #         Figure resolution.
+
+    #     Returns
+    #     -------
+    #     dict[str, float]
+    #         Mapping ``{column_name: order}`` with the fitted convergence orders.
+    #     """
+
+    #     # ------------------------- data extraction ------------------------------
+    #     if isinstance(df.index, pd.MultiIndex):
+    #         x = df.index.get_level_values(x_label).astype(float).to_numpy()
+    #     else:
+    #         x = df.index.astype(float).to_numpy()
+
+    #     orders: dict[str, float] = {}
+
+    #     # ------------------------- figure set‑up --------------------------------
+    #     fig, ax = plt.subplots(figsize=(7, 5))
+    #     ax.set_xscale("log")
+    #     ax.set_yscale("log")
+    #     ax.set_xlabel(x_label, fontsize=11)
+    #     ax.set_ylabel("error", fontsize=11)
+    #     ax.set_title(title, fontsize=12, pad=10)
+
+    #     # ------------------------- each error column ----------------------------
+    #     for col in df.columns:
+    #         y = df[col].astype(float).to_numpy()
+    #         mask = (x > 0) & (y > 0)
+    #         if mask.sum() < 2:
+    #             ax.scatter(x, y, label=f"{col} (data)")
+    #             orders[col] = float("nan")
+    #             continue
+
+    #         # least‑squares linear fit in log–log space: log(y) = m log(x) + b
+    #         m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
+    #         orders[col] = m
+
+    #         y_fit = np.exp(b) * x**m
+
+    #         ax.plot(x, y, marker="o", linestyle="", linewidth=0, label=f"{col} (data)")
+    #         ax.plot(x, y_fit, linestyle="--", label=f"{col} fit, p≈{m:.2f}")
+
+    #     # ------------------------- cosmetics ------------------------------------
+    #     ax.grid(True, which="both", linestyle=":", linewidth=0.5)
+    #     ax.legend(frameon=False, fontsize=9)
+    #     fig.tight_layout()
+
+    #     # ------------------------- save figure ----------------------------------
+    #     save_dir = Path(save_dir)
+    #     save_dir.mkdir(exist_ok=True, parents=True)
+    #     namer = FileNamer(
+    #         file_name=file_stem or f"conv_{x_label}",
+    #         folder_name=str(save_dir),
+    #         mode="png",
+    #     )
+    #     fig.savefig(namer.file, dpi=dpi)
+    #     plt.close(fig)
+
+    #     return orders
+
     def _plot_and_fit(
         self,
         df: pd.DataFrame,
+        *,
         x_label: str,
-        title: str,
-        save_dir: str = "figures",
+        title: str | None = None,
+        save_dir: str | Path = "figures",
         file_stem: str | None = None,
         dpi: int = 300,
-    ) -> dict[str, float]:
-        """Return a convergence‑order dictionary and save a single log–log figure.
+    ) -> Dict[str, float]:
+        """Plot error curves on log–log axes and return fitted convergence orders.
 
-        Parameters
-        ----------
-        df : pandas.DataFrame
-            Rows are indexed by the discretisation parameter named *x_label* (either as a
-            simple ``Index`` or as one level of a ``MultiIndex``).  Columns store error
-            measures to be analysed.
-        x_label : str
-            Name of the horizontal‑axis variable (e.g. ``"dt"``, ``"n"`` or ``"k"``).
-        title : str
-            Figure title.
-        save_dir : str, default ``"figures"``
-            Output directory (created on demand).
-        file_stem : str | None
-            Stem of the PNG filename.  If ``None`` a name derived from *x_label* is used.
-        dpi : int, default 300
-            Figure resolution.
-
-        Returns
-        -------
-        dict[str, float]
-            Mapping ``{column_name: order}`` with the fitted convergence orders.
+        All error columns in *df* are plotted in a *single* figure.  The slope
+        *p* of each log–log line ``error ≍ C·x^{-p}`` is reported in the legend.
         """
-
-        # ------------------------- data extraction ------------------------------
+        # ------------------------- x‑axis extraction -------------------------
         if isinstance(df.index, pd.MultiIndex):
-            x = df.index.get_level_values(x_label).astype(float).to_numpy()
+            x = df.index.get_level_values(x_label).to_numpy(float)
         else:
-            x = df.index.astype(float).to_numpy()
+            x = df.index.to_numpy(float)
 
-        orders: dict[str, float] = {}
+        # guarantee monotone x for nicer plots
+        sort_idx = np.argsort(x)
+        x = x[sort_idx]
+        df = df.iloc[sort_idx]
 
-        # ------------------------- figure set‑up --------------------------------
+        # --------------------------- figure set‑up ---------------------------
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel(x_label, fontsize=11)
-        ax.set_ylabel("error", fontsize=11)
-        ax.set_title(title, fontsize=12, pad=10)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("error   (L2)")
+        if title is not None:
+            ax.set_title(title)
 
-        # ------------------------- each error column ----------------------------
-        for col in df.columns:
-            y = df[col].astype(float).to_numpy()
+        markers = itertools.cycle("osd^vP*X")
+        linestyles = itertools.cycle(["-", "--", "-.", ":"])
+        orders: Dict[str, float] = {}
+
+        # --------------------- iterate each error column ---------------------
+        for col, mk, ls in zip(df.columns, markers, linestyles):
+            y = df[col].to_numpy(float)
+            ax.plot(x, y, marker=mk, linestyle=ls, label=col)
+
             mask = (x > 0) & (y > 0)
-            if mask.sum() < 2:
-                ax.scatter(x, y, label=f"{col} (data)")
+            if mask.sum() >= 2:
+                m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
+                p = -m  # convergence order (positive)
+                orders[col] = p
+                y_fit = np.exp(b) * x**m
+                ax.plot(x, y_fit, ls, linewidth=1, alpha=0.5)
+                ax.text(
+                    x[-1],
+                    y_fit[-1],
+                    f"  p≈{p:.2f}",
+                    va="center",
+                    fontsize=8,
+                )
+            else:
                 orders[col] = float("nan")
-                continue
 
-            # least‑squares linear fit in log–log space: log(y) = m log(x) + b
-            m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
-            orders[col] = m
-
-            y_fit = np.exp(b) * x**m
-
-            ax.plot(x, y, marker="o", linestyle="", linewidth=0, label=f"{col} (data)")
-            ax.plot(x, y_fit, linestyle="--", label=f"{col} fit, p≈{m:.2f}")
-
-        # ------------------------- cosmetics ------------------------------------
+        # --------------------------- cosmetics ------------------------------
         ax.grid(True, which="both", linestyle=":", linewidth=0.5)
         ax.legend(frameon=False, fontsize=9)
         fig.tight_layout()
 
-        # ------------------------- save figure ----------------------------------
+        # ----------------------- save to disk -------------------------------
         save_dir = Path(save_dir)
-        save_dir.mkdir(exist_ok=True, parents=True)
-        namer = FileNamer(
-            file_name=file_stem or f"conv_{x_label}",
-            folder_name=str(save_dir),
-            mode="png",
-        )
+        save_dir.mkdir(parents=True, exist_ok=True)
+        basename = file_stem or f"conv_{x_label}"
+        namer = FileNamer(file_name=basename, folder_name=str(save_dir), mode="png")
         fig.savefig(namer.file, dpi=dpi)
         plt.close(fig)
-
         return orders
 
     def spatial_error_convergence(
