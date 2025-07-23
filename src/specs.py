@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from firedrake import *
-from typing import Union
+from typing import Union, List
 
 
 @dataclass
@@ -66,20 +66,35 @@ class PDESystem(object):
             a MixedFunctionSpace.
         c) coord: Unique parametrisation of the mesh
         d) f: Just 1 if V is a 1 FunctionSpace or 1 VectorFunctionSpace (in this second case
-            it will have several subfunctions). In the complementary case (MFS), it needs to be
-            a list with 1 to 1 correspondence between each f (u / delta t = f(u, ...). without the
-            dx) and each subspace (either FunctionSpace or VectorFunctionSpace), impossible to be
+            it will have several subfunctions, but VFS is ment to be defined over a same f function
+            as even its a VFS with dim 5 for instance, it will only have
+            one subfunction as the 5 differents ones are considered by the program
+            as just one single function object (staked contigiously in physical memory), thats
+            why we have this 1 to 1 correspondence in VFS). In the complementary case (MFS), it needs to be
+            a lists of f defined with a 1 to 1 correspondence with each subFS or subVFS of V. the
+            u / delta t = f(u, ...). without the dx) and each subspace
+            (either FunctionSpace or VectorFunctionSpace), impossible to be
             a nested MixedFunctionSpace.
+            --- IS A NORMAL FUNCTION OR LIST OF FUNCTIONS EXPRESSED IN UFL
+            IS NOT EVEN A FIREDRAAKES FUNCTION.
+        d1) u0: Function defined over all V, here we define the initial conditions
+            for all the pde's of the system at the same time, each with one subfunction
+            associated. Again, if we have a MFS composed of FS and VFS, as VFS do
+            also have just 1 subfunctions, we would not have to think about nested
+            loops over this subfunctions. It is some sense also flattened (same behaviour
+            as what I have in my notes about it.)
         e) boundary conditions: A non sorted list with all of them. The program will automatically
             handle it.
         d) time_dependent_constants_bts: Same
         e) name: Name of the general system.
+
+    2. At the end, as V defines the whole system
     """
 
     mesh: Mesh
     V: Union[FunctionSpace, VectorFunctionSpace, MixedFunctionSpace]
     coord: SpatialCoordinate
-    f: Function
+    f: function | List[function]
     u0: Function  # (if system is mixed, use Function(V) withc .subfunctions[] already specified)
     boundary_conditions: tuple[DirichletBC | EquationBC]
     time_dependent_constants_bts: Constant | tuple[Constant] | None = None
@@ -100,3 +115,5 @@ class PDESystem(object):
             self.time_dependent_constants_bts = (self.time_dependent_constants_bts,)
         else:
             self.time_dependent_constants_bts = tuple(self.time_dependent_constants_bts)
+        # functions to list
+        self.f = [self.f] if not isinstance(self.f, list) else self.f

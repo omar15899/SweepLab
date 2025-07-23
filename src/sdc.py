@@ -240,24 +240,27 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         u_c_split = split(u_c)
         u0_c_split = split(u0_c)
         R_coll = 0
-        for m in range(self.M):
-            Rm = inner(u_c_split[m] - u0_c_split[m], w[m])
-            for j in range(self.M):
-                Rm -= deltat * Q[m, j] * f(t0 + tau[j] * deltat, u_c_split[j], w[m])
-            R_coll += Rm * dx
+        for f_i in f:
+            for m in range(self.M):
+                Rm = inner(u_c_split[m] - u0_c_split[m], w[m])
+                for j in range(self.M):
+                    Rm -= (
+                        deltat * Q[m, j] * f_i(t0 + tau[j] * deltat, u_c_split[j], w[m])
+                    )
+                R_coll += Rm * dx
 
-            self.R_coll = R_coll
+                self.R_coll = R_coll
 
-            problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
-            self.collocation_solver = NonlinearVariationalSolver(
-                problem,
-                solver_parameters=self.solver_parameters
-                or {
-                    "snes_type": "newtonls",
-                    "snes_rtol": 1e-8,
-                    "ksp_type": "cg",
-                },
-            )
+                problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
+                self.collocation_solver = NonlinearVariationalSolver(
+                    problem,
+                    solver_parameters=self.solver_parameters
+                    or {
+                        "snes_type": "newtonls",
+                        "snes_rtol": 1e-8,
+                        "ksp_type": "cg",
+                    },
+                )
 
     def _setup_paralell_sweep_solver(self):
         """
@@ -269,6 +272,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         is defined. As there's no coupled systems, we just need to
         work with the basis of that finite_element space, ignoring
         the rest of W.
+
+        ASK IF I WOULD BE ABLE TO USE TRIALS ON W AND WITH SELG.BCS
+        INSTEADD OF SELF.BOUNDARY_CONDITIONS
 
         """
         deltat = self.deltat
@@ -283,59 +289,63 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.sweep_solvers = []
         self.R_sweep = []
 
-        # We now instantiate also de residual of the original collocation problem
-        # in order to study the convergence of the sweeps.
-        R_coll = 0
+        # We go over the whole system, think that VFS function is
+        # the same inte
+        for f_i in f:
+            for m in range(self.M):
+                # As in my notes, each test function is independemt from the rest
+                u_m = self.u_k_act.subfunctions[m]
+                v_m = TestFunction(u_m.function_space())
+                # v_m = TestFunction(self.W)
 
-        for m in range(self.M):
-            # As in my notes, each test function is independemt from the rest
-            u_m = self.u_k_act.subfunctions[m]
-            v_m = TestFunction(u_m.function_space())
+                #  assemble the part with u^{k+1}. We have to be very carefull as
+                # v_m will be included in the function f.
+                left = (
+                    inner(u_m, v_m)
+                    - deltat
+                    * self.scale
+                    * Q_D[m, m]
+                    * f_i(t0 + tau[m] * deltat, u_m, v_m)
+                ) * dx  # f need to be composed with the change of variables
 
-            #  assemble the part with u^{k+1}. We have to be very carefull as
-            # v_m will be included in the function f.
-            left = (
-                inner(u_m, v_m)
-                - deltat * self.scale * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
-            ) * dx  # f need to be composed with the change of variables
+                # assemble part with u^{k}
+                right = inner(self.u_0.subfunctions[m], v_m)
+                for j in range(self.M):
+                    coeff = Q[m, j] - self.scale * Q_D[m, j]
+                    f_value = f_i(
+                        t0 + tau[j] * deltat,
+                        self.u_k_prev.subfunctions[j],
+                        v_m,
+                    )
 
-            # assemble part with u^{k}
-            right = inner(self.u_0.subfunctions[m], v_m)
-            for j in range(self.M):
-                coeff = Q[m, j] - self.scale * Q_D[m, j]
-                f_value = f(
-                    t0 + tau[j] * deltat,
-                    self.u_k_prev.subfunctions[j],
-                    v_m,
+                    right += deltat * coeff * f_value
+
+                right = right * dx
+
+                # Define the functional for that specific node
+                R_sweep = left - right
+
+                self.R_sweep.append(R_sweep)
+
+                # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+                problem_m = NonlinearVariationalProblem(
+                    R_sweep, u_m, bcs=self.PDEs.boundary_conditions
                 )
 
-                right += deltat * coeff * f_value
-
-            right = right * dx
-
-            # Define the functional for that specific node
-            R_sweep = left - right
-
-            self.R_sweep.append(R_sweep)
-
-            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(
-                R_sweep, u_m, bcs=self.PDEs.boundary_conditions
-            )
-            self.sweep_solvers.append(
-                NonlinearVariationalSolver(
-                    problem_m,
-                    solver_parameters=(
-                        {
-                            "snes_type": "newtonls",
-                            "snes_rtol": 1e-8,
-                            "ksp_type": "cg",
-                        }
-                        if not self.solver_parameters
-                        else self.solver_parameters
-                    ),
+                self.sweep_solvers.append(
+                    NonlinearVariationalSolver(
+                        problem_m,
+                        solver_parameters=(
+                            {
+                                "snes_type": "newtonls",
+                                "snes_rtol": 1e-8,
+                                "ksp_type": "cg",
+                            }
+                            if not self.solver_parameters
+                            else self.solver_parameters
+                        ),
+                    )
                 )
-            )
 
     def _setup_upper_triangular_sweep_solver(self):
         pass
@@ -370,54 +380,58 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.sweep_solvers = []
         self.R_sweep = []
 
-        for m in range(self.M):
-            # As in my notes, each test function is independemt from the rest
-            v_m = v[m]
-            # retrieve m-coordinate of the vector function
-            u_m = u_k_act_tup[m]
-            #  assemble the part with u^{k+1}. We have to be very carefull as
-            # v_m will be included in the function f.
-            left = (
-                inner(u_m, v_m)
-                - deltat * self.scale * Q_D[m, m] * f(t0 + tau[m] * deltat, u_m, v_m)
-            ) * dx  # f need to be composed with the change of variables
+        for f_i in f:
+            for m in range(self.M):
+                # As in my notes, each test function is independemt from the rest
+                v_m = v[m]
+                # retrieve m-coordinate of the vector function
+                u_m = u_k_act_tup[m]
+                #  assemble the part with u^{k+1}. We have to be very carefull as
+                # v_m will be included in the function f.
+                left = (
+                    inner(u_m, v_m)
+                    - deltat
+                    * self.scale
+                    * Q_D[m, m]
+                    * f_i(t0 + tau[m] * deltat, u_m, v_m)
+                ) * dx  # f need to be composed with the change of variables
 
-            # assemble part with u^{k}
-            right = inner(u_0.subfunctions[m], v_m)
-            for j in range(self.M):
-                coeff = Q[m, j] - self.scale * Q_D[m, j]
-                right += (
-                    deltat
-                    * coeff
-                    * f(
-                        t0 + tau[j] * deltat,
-                        u_k_prev.subfunctions[j],
-                        v_m,
+                # assemble part with u^{k}
+                right = inner(u_0.subfunctions[m], v_m)
+                for j in range(self.M):
+                    coeff = Q[m, j] - self.scale * Q_D[m, j]
+                    right += (
+                        deltat
+                        * coeff
+                        * f_i(
+                            t0 + tau[j] * deltat,
+                            u_k_prev.subfunctions[j],
+                            v_m,
+                        )
                     )
+                right = right * dx
+
+                # Add to general residual functional
+                R_sweep += left - right
+
+            self.R_sweep = R_sweep
+
+            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+            problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs)
+            self.sweep_solvers.append(
+                NonlinearVariationalSolver(
+                    problem_m,
+                    solver_parameters=(
+                        {
+                            "snes_type": "newtonls",
+                            "snes_rtol": 1e-8,
+                            "ksp_type": "cg",
+                        }
+                        if not self.solver_parameters
+                        else self.solver_parameters
+                    ),
                 )
-            right = right * dx
-
-            # Add to general residual functional
-            R_sweep += left - right
-
-        self.R_sweep = R_sweep
-
-        # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-        problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs)
-        self.sweep_solvers.append(
-            NonlinearVariationalSolver(
-                problem_m,
-                solver_parameters=(
-                    {
-                        "snes_type": "newtonls",
-                        "snes_rtol": 1e-8,
-                        "ksp_type": "cg",
-                    }
-                    if not self.solver_parameters
-                    else self.solver_parameters
-                ),
             )
-        )
 
     def solve(self, T, sweeps, real_solution_exp: Function = None):
         """
@@ -555,6 +569,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             float(compound_norm(self.u_collocation, self.u_k_act))
                         )
 
+                        print(
+                            f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
+                        )
                         print(
                             f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
                         )
