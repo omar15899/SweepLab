@@ -91,7 +91,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.bcs = self._define_node_time_boundary_setup()
+        self.bcs = (
+            self._define_node_time_boundary_setup()
+            if (not self.is_parallel and not self.full_collocation)
+            else self.PDEs.boundary_conditions
+        )
 
         # Define the residuals
         self.R_sweep = []
@@ -291,10 +295,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         # We go over the whole system, think that VFS function is
         # the same inte
-        for f_i in f:
+        for p, f_i in enumerate(f):
             for m in range(self.M):
                 # As in my notes, each test function is independemt from the rest
-                u_m = self.u_k_act.subfunctions[m]
+                u_m = self.u_k_act.subfunctions[p + m * self.lenV]
                 v_m = TestFunction(u_m.function_space())
                 # v_m = TestFunction(self.W)
 
@@ -437,16 +441,24 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             )
         )
 
-    def solve(self, T, sweeps, real_solution_exp: Function = None):
+    def solve(
+        self,
+        T,
+        sweeps,
+        real_solution_exp: Function | None = None,
+        analysis: bool = False,
+    ):
         """
         real_solution_exp = ufl expression to be projected over the W space dependent
         on space and time if needed. X will be inputed considering that they
         are going to be the coordinates OBJECT over the mesh.
 
-        NEEDS TO BE REARRANGED FOR CLARITY PURPOSES
+        NEEDS_TO_BE_REARRANGED_FOR_CLARITY_PURPOSES
         """
 
-        def _update_exact_field(t_now):
+        # ------------------------------------------------------------------------
+        # Helper: interpolate exact solution at all collocation nodes
+        def _update_exact_field(t_now: float):
             """
             interpolates the exact solution over all of the subtime intervals
             tau defined in the collocation problem.
@@ -458,15 +470,28 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 local_t = t_now + self.tau[m] * self.deltat
                 ru.interpolate(real_solution_exp(x, local_t))
 
-        def compound_norm(u: Function, v: Function):
+        # Helper: compound L2 norm across all subfunctions
+        def _compound_norm(u: Function, v: Function) -> float:
             return sum(
                 errornorm(u_k, v_k, norm_type="L2")
                 for u_k, v_k in zip(u.subfunctions, v.subfunctions)
             )
 
+        # Helper: set scale for MIN-SR-FLEX or default
+        def _set_scale(k: int):
+            if self.prectype == "MIN-SR-FLEX":
+                self.scale.assign(1.0 / k)
+            else:
+                self.scale.assign(1.0)
+
+        use_collocation = self.full_collocation
+        use_exact = real_solution_exp is not None
+        use_parallel = self.is_parallel
+        write_vtk = self.mode == "vtk"
+
         t, step = 0.0, 0
 
-        if real_solution_exp is not None:
+        if use_exact:
             real_u = Function(self.W, name="u_exact")
             for u in real_u.subfunctions:
                 u.interpolate(real_solution_exp(SpatialCoordinate(self.W.mesh()), t))
@@ -484,137 +509,136 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             ]
         }
 
-        if self.mode != "vtk":
+        if not write_vtk:
             with CheckpointFile(self.file, "w") as afile:
                 # Save the mesh
                 afile.save_mesh(self.mesh)
+
                 while t < T:
-                    _update_exact_field(t) if real_solution_exp else None
+                    _update_exact_field(t) if use_exact else None
 
                     # Solve the full collocation solver
-                    if self.full_collocation:
+                    if use_collocation:
                         self.collocation_solver.solve()
                         for u in self.u_0_collocation.subfunctions:
                             u.assign(self.u_collocation.subfunctions[-1])
 
                     err_intra = []
+
                     # Apply the sweep
                     for k in range(1, sweeps + 1):
-                        if self.prectype == "MIN-SR-FLEX":
-                            self.scale.assign(1.0 / k)
-                        else:
-                            self.scale.assign(1.0)
-
+                        _set_scale(k)
                         self.u_k_prev.assign(self.u_k_act)
-
-                        #############################################
-                        ############### Measuring errors ###############
-                        #############################################
-                        # print(f"step: {step}, time = {t}")
-                        # print("-------------------------------------------------")
-                        # RESIDUAL ERRORS
-                        residual_sweep = (
-                            (assemble(Rm).riesz_representation() for Rm in self.R_sweep)
-                            if self.is_parallel
-                            else (assemble(self.R_sweep).riesz_representation(),)
-                        )
-                        total_residual_sweep = sum(norm(r) for r in residual_sweep)
-
-                        if self.full_collocation:
-                            residual_collocation = assemble(
-                                self.R_coll
-                            ).riesz_representation()
-                            total_residual_collocation = norm(
-                                residual_collocation, norm_type="L2"
-                            )
-                        else:
-                            residual_collocation = None
-                            total_residual_collocation = 0.0
-
                         for s in self.sweep_solvers:
                             s.solve()
 
-                        # ERROR SWEEP SOLUTION VS COLLOCATION ERROR VS SWEEP ERROR
-                        sweep_vs_collocation_errornorm = (
-                            errornorm(
-                                self.u_collocation.subfunctions[-1],
-                                self.u_k_act.subfunctions[-1],
-                                norm_type="L2",
+                        if analysis:
+                            #############################################
+                            ############### Measuring errors ###############
+                            #############################################
+                            # print(f"step: {step}, time = {t}")
+                            # print("-------------------------------------------------")
+                            # RESIDUAL ERRORS
+
+                            # Sweep residual norm
+                            residual_sweep_vecs = (
+                                assemble(Rm).riesz_representation()
+                                for Rm in self.R_sweep
                             )
-                            if self.full_collocation
-                            else None
-                        )
+                            total_residual_sweep = sum(
+                                norm(r) for r in residual_sweep_vecs
+                            )
 
-                        sweep_vs_collocation_compound_norm = (
-                            compound_norm(self.u_collocation, self.u_k_act)
-                            if self.full_collocation
-                            else None
-                        )
+                            # Collocation residual norm
+                            if use_collocation:
+                                residual_collocation = assemble(
+                                    self.R_coll
+                                ).riesz_representation()
+                                total_residual_collocation = norm(
+                                    residual_collocation, norm_type="L2"
+                                )
+                            else:
+                                residual_collocation = None
+                                total_residual_collocation = 0.0
 
-                        sweep_vs_real_errornorm = (
-                            (
+                            # ERROR SWEEP SOLUTION VS COLLOCATION ERROR VS SWEEP ERROR
+                            sweep_vs_collocation_errornorm = (
+                                errornorm(
+                                    self.u_collocation.subfunctions[-1],
+                                    self.u_k_act.subfunctions[-1],
+                                    norm_type="L2",
+                                )
+                                if use_collocation
+                                else None
+                            )
+
+                            sweep_vs_collocation_compound_norm = (
+                                _compound_norm(self.u_collocation, self.u_k_act)
+                                if use_collocation
+                                else None
+                            )
+
+                            sweep_vs_real_errornorm = (
                                 errornorm(
                                     real_u.subfunctions[-1],
                                     self.u_k_act.subfunctions[-1],
                                     norm_type="L2",
                                 )
+                                if use_exact
+                                else None
                             )
-                            if real_solution_exp is not None
-                            else None
-                        )
 
-                        sweep_vs_real_compound_norm = (
-                            compound_norm(real_u, self.u_k_act)
-                            if real_solution_exp is not None
-                            else None
-                        )
-
-                        collocation_vs_real_errornorm = (
-                            errornorm(
-                                self.u_collocation.subfunctions[-1],
-                                real_u.subfunctions[-1],
+                            sweep_vs_real_compound_norm = (
+                                _compound_norm(real_u, self.u_k_act)
+                                if use_exact
+                                else None
                             )
-                            if real_solution_exp is not None
-                            else None
-                        )
 
-                        collocation_vs_real_compound_norm = (
-                            compound_norm(self.u_collocation, real_u)
-                            if real_solution_exp is not None
-                            else None
-                        )
+                            collocation_vs_real_errornorm = (
+                                errornorm(
+                                    self.u_collocation.subfunctions[-1],
+                                    real_u.subfunctions[-1],
+                                )
+                                if (use_exact and use_collocation)
+                                else None
+                            )
 
-                        # err_intra.append(float(sweep_vs_collocation_errornorm))
-                        # err_intra.append(
-                        #     float(compound_norm(self.u_collocation, self.u_k_act))
-                        # )
+                            collocation_vs_real_compound_norm = (
+                                _compound_norm(self.u_collocation, real_u)
+                                if (use_exact and use_collocation)
+                                else None
+                            )
 
-                        print(
-                            f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
-                        )
-                        # print(f"Sweep vs real error norm: {sweep_vs_real_errornorm}")
-                        # print(
-                        #     f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
-                        # )
-                        # print("\n")
+                            err_intra.append(
+                                float(sweep_vs_collocation_compound_norm)
+                                if use_collocation
+                                else None
+                            )
 
-                        convergence_results[f"{step},{t},{k}"] = [
-                            total_residual_collocation,
-                            total_residual_sweep,
-                            sweep_vs_collocation_errornorm,
-                            sweep_vs_collocation_compound_norm,
-                            sweep_vs_real_errornorm,
-                            sweep_vs_real_compound_norm,
-                            collocation_vs_real_errornorm,
-                            collocation_vs_real_compound_norm,
-                        ]
+                            print(
+                                f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
+                            )
+                            # print(f"Sweep vs real error norm: {sweep_vs_real_errornorm}")
+                            # print(
+                            #     f"Collocation vs real error norm: {collocation_vs_real_errornorm}"
+                            # )
+                            # print("\n")
 
-                        #############################################
-                        #############################################
-                        #############################################
+                            convergence_results[f"{step},{t},{k}"] = [
+                                total_residual_collocation,
+                                total_residual_sweep,
+                                sweep_vs_collocation_errornorm,
+                                sweep_vs_collocation_compound_norm,
+                                sweep_vs_real_errornorm,
+                                sweep_vs_real_compound_norm,
+                                collocation_vs_real_errornorm,
+                                collocation_vs_real_compound_norm,
+                            ]
 
-                    print(f"step {step}  t={t:.4e}  err_intra={err_intra}")
+                            print(f"step {step}  t={t:.4e}  err_intra={err_intra}")
+
                     # print("\n\n\n")
+                    print(f"step {step}  t={t:.4e}")
 
                     u_last_node = self.u_k_act.subfunctions[-1]
                     u_last_node.rename("u")
@@ -647,10 +671,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             vtk = VTKFile(self.file)
             while t < T:
                 for k in range(1, sweeps + 1):
-                    if self.prectype == "MIN-SR-FLEX":
-                        self.scale.assign(1.0 / k)
-                    else:
-                        self.scale.assign(1.0)
+                    _set_scale(k)
                     self.u_k_prev.assign(self.u_k_act)
                     for s in self.sweep_solvers:
                         s.solve()
@@ -670,4 +691,4 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 # print(f"step: {step}, time = {t}")
                 step += 1
 
-        return step - 1 if self.mode != "vtk" else None
+            return None  # same behaviour as original for vtk mode
