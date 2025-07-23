@@ -249,18 +249,18 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     )
                 R_coll += Rm * dx
 
-                self.R_coll = R_coll
+        self.R_coll = R_coll
 
-                problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
-                self.collocation_solver = NonlinearVariationalSolver(
-                    problem,
-                    solver_parameters=self.solver_parameters
-                    or {
-                        "snes_type": "newtonls",
-                        "snes_rtol": 1e-8,
-                        "ksp_type": "cg",
-                    },
-                )
+        problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
+        self.collocation_solver = NonlinearVariationalSolver(
+            problem,
+            solver_parameters=self.solver_parameters
+            or {
+                "snes_type": "newtonls",
+                "snes_rtol": 1e-8,
+                "ksp_type": "cg",
+            },
+        )
 
     def _setup_paralell_sweep_solver(self):
         """
@@ -380,8 +380,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.sweep_solvers = []
         self.R_sweep = []
 
-        for f_i in f:
-            for m in range(self.M):
+        for p, f_i in enumerate(f):
+            for i_m in range(self.M):
+                m = p + i_m * self.lenV
                 # As in my notes, each test function is independemt from the rest
                 v_m = v[m]
                 # retrieve m-coordinate of the vector function
@@ -392,14 +393,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     inner(u_m, v_m)
                     - deltat
                     * self.scale
-                    * Q_D[m, m]
-                    * f_i(t0 + tau[m] * deltat, u_m, v_m)
+                    * Q_D[m % self.M, m % self.M]
+                    * f_i(t0 + tau[m % self.M] * deltat, u_m, v_m)
                 ) * dx  # f need to be composed with the change of variables
 
                 # assemble part with u^{k}
                 right = inner(u_0.subfunctions[m], v_m)
                 for j in range(self.M):
-                    coeff = Q[m, j] - self.scale * Q_D[m, j]
+                    coeff = (
+                        Q[m % self.M, j % self.M]
+                        - self.scale * Q_D[m % self.M, j % self.M]
+                    )
                     right += (
                         deltat
                         * coeff
@@ -414,24 +418,24 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 # Add to general residual functional
                 R_sweep += left - right
 
-            self.R_sweep = R_sweep
+        self.R_sweep = R_sweep
 
-            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs)
-            self.sweep_solvers.append(
-                NonlinearVariationalSolver(
-                    problem_m,
-                    solver_parameters=(
-                        {
-                            "snes_type": "newtonls",
-                            "snes_rtol": 1e-8,
-                            "ksp_type": "cg",
-                        }
-                        if not self.solver_parameters
-                        else self.solver_parameters
-                    ),
-                )
+        # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+        problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs)
+        self.sweep_solvers.append(
+            NonlinearVariationalSolver(
+                problem_m,
+                solver_parameters=(
+                    {
+                        "snes_type": "newtonls",
+                        "snes_rtol": 1e-8,
+                        "ksp_type": "cg",
+                    }
+                    if not self.solver_parameters
+                    else self.solver_parameters
+                ),
             )
+        )
 
     def solve(self, T, sweeps, real_solution_exp: Function = None):
         """
