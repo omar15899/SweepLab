@@ -418,7 +418,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 # Add to general residual functional
                 R_sweep += left - right
 
-        self.R_sweep = R_sweep
+        self.R_sweep = [R_sweep]
 
         # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
         problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs)
@@ -466,6 +466,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         t, step = 0.0, 0
 
+        if real_solution_exp is not None:
+            real_u = Function(self.W, name="u_exact")
+            for u in real_u.subfunctions:
+                u.interpolate(real_solution_exp(SpatialCoordinate(self.W.mesh()), t))
+
         convergence_results = {
             "INFO": [
                 "Total residual collocation",
@@ -479,23 +484,20 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             ]
         }
 
-        if real_solution_exp is not None:
-            real_u = Function(self.W, name="u_exact")
-            for u in real_u.subfunctions:
-                u.interpolate(real_solution_exp(SpatialCoordinate(self.W.mesh()), t))
-
         if self.mode != "vtk":
             with CheckpointFile(self.file, "w") as afile:
                 # Save the mesh
                 afile.save_mesh(self.mesh)
                 while t < T:
-                    err_intra = []
-                    _update_exact_field(t)
-                    # Solve the full collocation solver
-                    self.collocation_solver.solve()
-                    for u in self.u_0_collocation.subfunctions:
-                        u.assign(self.u_collocation.subfunctions[-1])
+                    _update_exact_field(t) if real_solution_exp else None
 
+                    # Solve the full collocation solver
+                    if self.full_collocation:
+                        self.collocation_solver.solve()
+                        for u in self.u_0_collocation.subfunctions:
+                            u.assign(self.u_collocation.subfunctions[-1])
+
+                    err_intra = []
                     # Apply the sweep
                     for k in range(1, sweeps + 1):
                         if self.prectype == "MIN-SR-FLEX":
@@ -517,27 +519,36 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             else (assemble(self.R_sweep).riesz_representation(),)
                         )
                         total_residual_sweep = sum(norm(r) for r in residual_sweep)
-                        # print(f"Sweep residual norm: {total_residual_sweep}")
-                        residual_collocation = assemble(
-                            self.R_coll
-                        ).riesz_representation()
-                        total_residual_collocation = norm(residual_collocation)
-                        # print(
-                        # f"Initial collocation residual = {total_residual_collocation}"
-                        # )
+
+                        if self.full_collocation:
+                            residual_collocation = assemble(
+                                self.R_coll
+                            ).riesz_representation()
+                            total_residual_collocation = norm(
+                                residual_collocation, norm_type="L2"
+                            )
+                        else:
+                            residual_collocation = None
+                            total_residual_collocation = 0.0
 
                         for s in self.sweep_solvers:
                             s.solve()
 
                         # ERROR SWEEP SOLUTION VS COLLOCATION ERROR VS SWEEP ERROR
-                        sweep_vs_collocation_errornorm = errornorm(
-                            self.u_collocation.subfunctions[-1],
-                            self.u_k_act.subfunctions[-1],
-                            norm_type="L2",
+                        sweep_vs_collocation_errornorm = (
+                            errornorm(
+                                self.u_collocation.subfunctions[-1],
+                                self.u_k_act.subfunctions[-1],
+                                norm_type="L2",
+                            )
+                            if self.full_collocation
+                            else None
                         )
 
-                        sweep_vs_collocation_compound_norm = compound_norm(
-                            self.u_collocation, self.u_k_act
+                        sweep_vs_collocation_compound_norm = (
+                            compound_norm(self.u_collocation, self.u_k_act)
+                            if self.full_collocation
+                            else None
                         )
 
                         sweep_vs_real_errornorm = (
@@ -558,24 +569,26 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             else None
                         )
 
-                        collocation_vs_real_errornorm = errornorm(
-                            self.u_collocation.subfunctions[-1],
-                            real_u.subfunctions[-1],
+                        collocation_vs_real_errornorm = (
+                            errornorm(
+                                self.u_collocation.subfunctions[-1],
+                                real_u.subfunctions[-1],
+                            )
+                            if real_solution_exp is not None
+                            else None
                         )
 
-                        collocation_vs_real_compound_norm = compound_norm(
-                            self.u_collocation, real_u
+                        collocation_vs_real_compound_norm = (
+                            compound_norm(self.u_collocation, real_u)
+                            if real_solution_exp is not None
+                            else None
                         )
 
                         # err_intra.append(float(sweep_vs_collocation_errornorm))
+                        # err_intra.append(
+                        #     float(compound_norm(self.u_collocation, self.u_k_act))
+                        # )
 
-                        err_intra.append(
-                            float(compound_norm(self.u_collocation, self.u_k_act))
-                        )
-
-                        print(
-                            f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
-                        )
                         print(
                             f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
                         )
