@@ -424,6 +424,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         real_solution_exp = ufl expression to be projected over the W space dependent
         on space and time if needed. X will be inputed considering that they
         are going to be the coordinates OBJECT over the mesh.
+
+        NEEDS TO BE REARRANGED FOR CLARITY PURPOSES
         """
 
         def _update_exact_field(t_now):
@@ -440,13 +442,24 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         def compound_norm(u: Function, v: Function):
             return sum(
-                errornorm(u_k, v_k, norm_type="L2") ** 2
+                errornorm(u_k, v_k, norm_type="L2")
                 for u_k, v_k in zip(u.subfunctions, v.subfunctions)
             )
 
         t, step = 0.0, 0
 
-        convergence_results = {}
+        convergence_results = {
+            "INFO": [
+                "Total residual collocation",
+                "Total residual sweep",
+                "Sweep vs collocation error norm",
+                "Sweep vs collocation compound norm",
+                "Sweep vs real error norm",
+                "Sweep vs real compound norm",
+                "Collocation vs real error norm",
+                "Collocation vs real compound norm",
+            ]
+        }
 
         if real_solution_exp is not None:
             real_u = Function(self.W, name="u_exact")
@@ -505,6 +518,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             norm_type="L2",
                         )
 
+                        sweep_vs_collocation_compound_norm = compound_norm(
+                            self.u_collocation, self.u_k_act
+                        )
+
                         sweep_vs_real_errornorm = (
                             (
                                 errornorm(
@@ -517,9 +534,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             else None
                         )
 
+                        sweep_vs_real_compound_norm = (
+                            compound_norm(real_u, self.u_k_act)
+                            if real_solution_exp is not None
+                            else None
+                        )
+
                         collocation_vs_real_errornorm = errornorm(
                             self.u_collocation.subfunctions[-1],
                             real_u.subfunctions[-1],
+                        )
+
+                        collocation_vs_real_compound_norm = compound_norm(
+                            self.u_collocation, real_u
                         )
 
                         # err_intra.append(float(sweep_vs_collocation_errornorm))
@@ -541,8 +568,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             total_residual_collocation,
                             total_residual_sweep,
                             sweep_vs_collocation_errornorm,
+                            sweep_vs_collocation_compound_norm,
                             sweep_vs_real_errornorm,
+                            sweep_vs_real_compound_norm,
                             collocation_vs_real_errornorm,
+                            collocation_vs_real_compound_norm,
                         ]
 
                         #############################################
