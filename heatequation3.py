@@ -20,9 +20,9 @@ def solve_heat_pde(
     full_collocation=False,
 ):
 
-    dt_str = f"{dt:.2e}"
-    Tfinal_str = f"{Tfinal:.2e}"
-    file_name = f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}_nodes{M}_degreepol{degree}_prectype{prectype}_tfinal{Tfinal_str}"
+    dt_str = f"{dt:.2e}".replace(".", "p")
+    Tfinal_str = f"{Tfinal:.2e}".replace(".", "p")
+    file_name = f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}_nodes{M}_degreepol{degree}_prectype{prectype}_tfinal{Tfinal_str}_is_parallel{str(is_parallel)}"
 
     mesh = IntervalMesh(n_cells, length_or_left=0, right=1)
     x = SpatialCoordinate(mesh)
@@ -75,22 +75,22 @@ def solve_heat_pde(
         full_collocation=full_collocation,
     )
 
-    solver.solve(Tfinal, nsweeps, u_exact)
-    # solver.solve(Tfinal, nsweeps)
+    # solver.solve(Tfinal, nsweeps, u_exact)
+    solver.solve(Tfinal, nsweeps)
 
 
-# N_CELLS = [1, 4, 8, 16, 25, 50, 100, 200, 400, 800]
-# DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
-# SWEEPS = [1, 2, 3, 4, 5, 6]
+N_CELLS = [4, 8, 16, 25, 50, 100, 200, 400, 800]
+DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+SWEEPS = [1, 2, 3, 4, 5, 6]
 # DEGREE = [1, 2, 3, 4]
 
 
 N_CELLS = [8]
-DT_LIST = [1e-1]
-SWEEPS = [8]
+DT_LIST = [1e-5]
+SWEEPS = [4]
 DEGREE = [1]
-M = 8
-TFINAL = 0.5
+M = 6
+TFINAL = 1
 
 
 for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
@@ -101,14 +101,7 @@ for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
         M=M,
         Tfinal=TFINAL,
         is_parallel=False,
-        prectype="MIN-SR-FLEX",
+        prectype="MIN-SR-NS",
         degree=deg,
-        full_collocation=True,
+        full_collocation=False,
     )
-
-
-"""
-
-vale, creo que hay un problema serio, y ese problema tiene que ver con cómo se plotea cada error, me gustaría que modificaras la función de plotting para generar las curvas correctas para cada uno de los errores, se muy consciente de que tiene que verse bien y tiene que maximizar la información que me puedes 
-
-"""
