@@ -91,11 +91,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.bcs = (
-            self._define_node_time_boundary_setup()
-            if (not self.is_parallel and not self.full_collocation)
-            else self.PDEs.boundary_conditions
-        )
+        self.bcs = self._define_node_time_boundary_setup()
 
         # Define the residuals
         self.R_sweep = []
@@ -251,6 +247,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     Rm -= (
                         deltat * Q[m, j] * f_i(t0 + tau[j] * deltat, u_c_split[j], w[m])
                     )
+
                 R_coll += Rm * dx
 
         self.R_coll = R_coll
@@ -379,7 +376,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         Q = self.Q
         Q_D = self.Q_D
-        R_coll = 0
 
         self.sweep_solvers = []
         self.R_sweep = []
@@ -510,12 +506,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         }
 
         if not write_vtk:
-            with CheckpointFile(self.file, "w") as afile:
+            with CheckpointFile(self.file, "a") as afile:
                 # Save the mesh
                 afile.save_mesh(self.mesh)
 
                 while t < T:
-                    _update_exact_field(t) if use_exact else None
 
                     # Solve the full collocation solver
                     if use_collocation:
@@ -533,6 +528,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             s.solve()
 
                         if analysis:
+                            _update_exact_field(t) if use_exact else None
                             #############################################
                             ############### Measuring errors ###############
                             #############################################
@@ -663,7 +659,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     Path(self.file).with_suffix("").as_posix()
                     + "_convergence_results.json"
                 )
-                with open(str(convergence_results_path), "w") as f:
+                with open(str(convergence_results_path), "a") as f:
                     json.dump(convergence_results, f, indent=2)
                 return step - 1
 
