@@ -91,7 +91,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.V = self.PDEs.V
+        self.bcs_V = self.PDEs.boundary_conditions
         self.bcs_W, self.bcs_V_2 = self._define_node_time_boundary_setup()
 
         # Define the residuals
