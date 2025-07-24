@@ -280,9 +280,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         work with the basis of that finite_element space, ignoring
         the rest of W.
 
-        ASK IF I WOULD BE ABLE TO USE TRIALS ON W AND WITH SELG.BCS
-        INSTEADD OF SELF.BOUNDARY_CONDITIONS
-
         """
         deltat = self.deltat
         tau = self.tau
@@ -296,8 +293,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.sweep_solvers = []
         self.R_sweep = []
 
-        # We go over the whole system, think that VFS function is
-        # the same inte
+        # We now instantiate also de residual of the original collocation problem
+        # in order to study the convergence of the sweeps.
         for p, f_i in enumerate(f):
             for m in range(self.M):
                 idx = p + m * self.lenV
@@ -330,38 +327,143 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     right += deltat * coeff * f_value
 
                 right = right * dx
+            # Define the functional for that specific node
+            R_sweep = left - right
 
-                # Define the functional for that specific node
-                R_sweep = left - right
+            self.R_sweep.append(R_sweep)
 
-                self.R_sweep.append(R_sweep)
-
-                local_bcs = tuple(
-                    bc.reconstruct(V=u_m.function_space())
-                    for bc in self.bcs_V
-                    if isinstance(bc, DirichletBC)
+            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+            problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_V)
+            self.sweep_solvers.append(
+                NonlinearVariationalSolver(
+                    problem_m,
+                    solver_parameters=(
+                        {
+                            "snes_type": "newtonls",
+                            "snes_rtol": 1e-8,
+                            "ksp_type": "cg",
+                        }
+                        if not self.solver_parameters
+                        else self.solver_parameters
+                    ),
                 )
+            )
 
-                # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-                problem_m = NonlinearVariationalProblem(
-                    R_sweep, u_m, bcs=self.local_bcs
-                )
+    # def _setup_paralell_sweep_solver(self):
+    #     """
+    #     Compute the solvers for the parallel case.
 
-                self.sweep_solvers.append(
-                    NonlinearVariationalSolver(
-                        problem_m,
-                        solver_parameters=(
-                            {
-                                "snes_type": "newtonls",
-                                "snes_rtol": 1e-8,
-                                "ksp_type": "preonly",
-                                "pc_type": "lu",
-                            }
-                            if not self.solver_parameters
-                            else self.solver_parameters
-                        ),
-                    )
-                )
+    #     + IMPORTANT: We create the test function over V because each
+    #     subfunction of W has as function_space() attribute which
+    #     points to the subspace of W where the basis of the function
+    #     is defined. As there's no coupled systems, we just need to
+    #     work with the basis of that finite_element space, ignoring
+    #     the rest of W.
+
+    #     ASK IF I WOULD BE ABLE TO USE TRIALS ON W AND WITH SELG.BCS
+    #     INSTEADD OF SELF.BOUNDARY_CONDITIONS
+
+    #     """
+    #     deltat = self.deltat
+    #     tau = self.tau
+    #     t0 = self.t_0_subinterval
+    #     f = self.PDEs.f
+    #     Q = self.Q
+    #     Q_D = self.Q_D
+    #     # We could use the mixed space but it's nonsense, as we don't have coupling
+    #     # among the different finite element subspaces.
+    #     # We store the solvers
+    #     self.sweep_solvers = []
+    #     self.R_sweep = []
+
+    #     # We go over the whole system, think that VFS function is
+    #     # the same inte
+    #     for p, f_i in enumerate(f):
+    #         for m in range(self.M):
+    #             idx = p + m * self.lenV
+    #             # As in my notes, each test function is independemt from the rest
+    #             u_m = self.u_k_act.subfunctions[idx]
+    #             v_m = TestFunction(u_m.function_space())
+    #             # v_m = TestFunction(self.W)
+
+    #             #  assemble the part with u^{k+1}. We have to be very carefull as
+    #             # v_m will be included in the function f.
+    #             left = (
+    #                 inner(u_m, v_m)
+    #                 - deltat
+    #                 * self.scale
+    #                 * Q_D[m, m]
+    #                 * f_i(t0 + tau[m] * deltat, u_m, v_m)
+    #             ) * dx  # f need to be composed with the change of variables
+
+    #             # assemble part with u^{k}
+    #             right = inner(self.u_0.subfunctions[idx], v_m)
+    #             for j in range(self.M):
+    #                 jdx = p + j * self.lenV
+    #                 coeff = Q[m, j] - self.scale * Q_D[m, j]
+    #                 f_value = f_i(
+    #                     t0 + tau[j] * deltat,
+    #                     self.u_k_prev.subfunctions[jdx],
+    #                     v_m,
+    #                 )
+
+    #                 right += deltat * coeff * f_value
+
+    #             right = right * dx
+
+    #             # Define the functional for that specific node
+    #             R_sweep = left - right
+
+    #             self.R_sweep.append(R_sweep)
+
+    #             # AS IM NOT SURE THAT THE FUNCTION_SPACE() OF THE MIXEDSPACE
+    #             # IS A REFERENCE AND NOT A NEW COPY OF THE INITIAL SPACE WHICH
+    #             # CREATED THE MIXEDFUNCTIONSPACE, WE NEED TO RECREATE IT.
+
+    #             Vlocal = u_m.function_space()  # espacio del nodo  m  para la variable p
+    #             local_bcs = []
+
+    #             for bc in self.bcs_V:
+    #                 # 1· sólo Dirichlet
+    #                 if not isinstance(bc, DirichletBC):
+    #                     continue
+
+    #                 # 2· ¿la BC pertenece a esta variable p?
+    #                 bc_fs = bc.function_space()
+    #                 var_idx = bc_fs.index if bc_fs.index is not None else 0
+    #                 if var_idx != p:  # BC de otra ecuación → fuera
+    #                     continue
+
+    #                 # 3· si era un VectorFunctionSpace, mantiene el sub‑componente
+    #                 if bc_fs.value_shape != ():  # BC aplicada a un componente vectorial
+    #                     _, sub_idx = (*bc._indices, None)[:2]  # (espacio, comp.)
+    #                     Vsub = Vlocal.sub(sub_idx)
+    #                 else:
+    #                     Vsub = Vlocal
+
+    #                 # 4· clonamos con reconstruct → todos los metadatos consistentes
+    #                 local_bcs.append(bc.reconstruct(V=Vsub))
+
+    #             local_bcs = tuple(local_bcs)
+
+    #             # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+    #             problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=local_bcs)
+
+    #             self.sweep_solvers.append(
+    #                 NonlinearVariationalSolver(
+    #                     problem_m,
+    #                     solver_parameters=(
+    #                         {
+    #                             "snes_type": "newtonls",
+    #                             "snes_rtol": 1e-8,
+    #                             "ksp_type": "preonly",
+    #                             "pc_type": "lu",
+    #                         }
+    #                         if not self.solver_parameters
+    #                         else self.solver_parameters
+    #                     ),
+    #                 )
+    #             )
 
     def _setup_upper_triangular_sweep_solver(self):
         pass
@@ -416,6 +518,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 # assemble part with u^{k}
                 right = inner(u_0.subfunctions[m], v_m)
                 for j in range(self.M):
+                    # we need to select the correct functions.
                     jdx = p + j * self.lenV
                     coeff = Q[i_m, j] - self.scale * Q_D[i_m, j]
                     right += (
