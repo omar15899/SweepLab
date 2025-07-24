@@ -175,6 +175,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             over the whole MFS, as the later is created within the PDESystem
             class, so the user is not allowed to define any bc over self.W,
             and thus we can ignore this case in the code.
+        4. When a MFS is created, the subspaces that conforms it are copied,
+            so the boundary conditions need to be also reassign to this new
+            copies.
 
         +. No matter if in _setup_paralell_sweep_solver we are working with
             self.V test,
@@ -188,6 +191,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         #     return list(self.PDEs.boundary_conditions)
 
         bcs = []
+        local_bcs = {}
         for bc in self.PDEs.boundary_conditions:
             if isinstance(bc, DirichletBC):
                 # First, we need to retrieve the index of the subspace
@@ -221,13 +225,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     subspace = subspace if sub_idx is None else subspace.sub(sub_idx)
                     # As Firedrake flattens the MixedFunctionSpace,
                     # we cannot have another MixedFunctionSpace nested!
-                    bcs.append(bc.reconstruct(V=(subspace)))
+                    local_bc = bc.reconstruct(V=(subspace))
+                    bcs.append(local_bc)
+                    local_bcs.setdefault(f"{idx}", []).append(local_bc)
+
             elif isinstance(bc, EquationBC):
                 pass
             else:
                 raise Exception("your bc is not accepted.")
 
-        return tuple(bcs)
+        return tuple(bcs), local_bcs
 
     def _setup_full_collocation_solver(self):
         deltat, tau, t0, f = self.deltat, self.tau, self.t_0_subinterval, self.PDEs.f
@@ -300,7 +307,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 idx = p + m * self.lenV
                 # As in my notes, each test function is independemt from the rest
                 u_m = self.u_k_act.subfunctions[idx]
-                v_m = TestFunction(u_m.function_space())
+                # We extract V_local, as it is a copy
+                V_local = u_m.function_space()
+                v_m = TestFunction(V_local)
                 # v_m = TestFunction(self.W)
 
                 #  assemble the part with u^{k+1}. We have to be very carefull as
@@ -327,27 +336,27 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     right += deltat * coeff * f_value
 
                 right = right * dx
-            # Define the functional for that specific node
-            R_sweep = left - right
+                # Define the functional for that specific node
+                R_sweep = left - right
 
-            self.R_sweep.append(R_sweep)
+                self.R_sweep.append(R_sweep)
 
-            # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-            problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_V)
-            self.sweep_solvers.append(
-                NonlinearVariationalSolver(
-                    problem_m,
-                    solver_parameters=(
-                        {
-                            "snes_type": "newtonls",
-                            "snes_rtol": 1e-8,
-                            "ksp_type": "cg",
-                        }
-                        if not self.solver_parameters
-                        else self.solver_parameters
-                    ),
+                # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
+                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_W)
+                self.sweep_solvers.append(
+                    NonlinearVariationalSolver(
+                        problem_m,
+                        solver_parameters=(
+                            {
+                                "snes_type": "newtonls",
+                                "snes_rtol": 1e-8,
+                                "ksp_type": "cg",
+                            }
+                            if not self.solver_parameters
+                            else self.solver_parameters
+                        ),
+                    )
                 )
-            )
 
     # def _setup_paralell_sweep_solver(self):
     #     """
