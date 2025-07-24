@@ -91,8 +91,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.bcs_V = self.PDEs.boundary_conditions
-        self.bcs_W = self._define_node_time_boundary_setup()
+        self.V = self.PDEs.V
+        self.bcs_W, self.bcs_V_2 = self._define_node_time_boundary_setup()
 
         # Define the residuals
         self.R_sweep = []
@@ -227,7 +227,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     # we cannot have another MixedFunctionSpace nested!
                     local_bc = bc.reconstruct(V=(subspace))
                     bcs.append(local_bc)
-                    local_bcs.setdefault(f"{idx}", []).append(local_bc)
+                    local_bcs.setdefault(idx + m_node * self.lenV, []).append(local_bc)
 
             elif isinstance(bc, EquationBC):
                 pass
@@ -342,7 +342,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 self.R_sweep.append(R_sweep)
 
                 # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_W)
+                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_V)
                 self.sweep_solvers.append(
                     NonlinearVariationalSolver(
                         problem_m,
