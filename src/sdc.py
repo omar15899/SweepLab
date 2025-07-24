@@ -91,7 +91,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # being instantiated in PDESystem.
 
         # Instantiate boundary conditions and test functions:
-        self.bcs = self._define_node_time_boundary_setup()
+        self.bcs_V = self.PDEs.boundary_conditions
+        self.bcs_W = self._define_node_time_boundary_setup()
 
         # Define the residuals
         self.R_sweep = []
@@ -239,27 +240,32 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         u0_c = self.u_0_collocation
         u_c_split = split(u_c)
         u0_c_split = split(u0_c)
+        w_split = split(w)
         R_coll = 0
-        for f_i in f:
+        for p, f_i in enumerate(f):
             for m in range(self.M):
-                Rm = inner(u_c_split[m] - u0_c_split[m], w[m])
+                idx = p + m * self.lenV
+                Rm = inner(u_c_split[idx] - u0_c_split[idx], w_split[idx])
                 for j in range(self.M):
+                    jdx = p + j * self.lenV
                     Rm -= (
-                        deltat * Q[m, j] * f_i(t0 + tau[j] * deltat, u_c_split[j], w[m])
+                        deltat
+                        * Q[m, j]
+                        * f_i(t0 + tau[j] * deltat, u_c_split[jdx], w_split[idx])
                     )
-
                 R_coll += Rm * dx
 
         self.R_coll = R_coll
 
-        problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs)
+        problem = NonlinearVariationalProblem(R_coll, u_c, bcs=self.bcs_W)
         self.collocation_solver = NonlinearVariationalSolver(
             problem,
             solver_parameters=self.solver_parameters
             or {
                 "snes_type": "newtonls",
                 "snes_rtol": 1e-8,
-                "ksp_type": "cg",
+                "ksp_type": "preonly",
+                "pc_type": "lu",
             },
         )
 
@@ -294,8 +300,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         # the same inte
         for p, f_i in enumerate(f):
             for m in range(self.M):
+                idx = p + m * self.lenV
                 # As in my notes, each test function is independemt from the rest
-                u_m = self.u_k_act.subfunctions[p + m * self.lenV]
+                u_m = self.u_k_act.subfunctions[idx]
                 v_m = TestFunction(u_m.function_space())
                 # v_m = TestFunction(self.W)
 
@@ -310,12 +317,13 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 ) * dx  # f need to be composed with the change of variables
 
                 # assemble part with u^{k}
-                right = inner(self.u_0.subfunctions[m], v_m)
+                right = inner(self.u_0.subfunctions[idx], v_m)
                 for j in range(self.M):
+                    jdx = p + j * self.lenV
                     coeff = Q[m, j] - self.scale * Q_D[m, j]
                     f_value = f_i(
                         t0 + tau[j] * deltat,
-                        self.u_k_prev.subfunctions[j],
+                        self.u_k_prev.subfunctions[jdx],
                         v_m,
                     )
 
@@ -328,10 +336,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                 self.R_sweep.append(R_sweep)
 
+                local_bcs = [
+                    bc.reconstruct(V=u_m.function_space())
+                    for bc in self.bcs_V
+                    if (bc.function_space().index or 0) == (p % self.lenV)
+                ]
+
                 # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-                problem_m = NonlinearVariationalProblem(
-                    R_sweep, u_m, bcs=self.PDEs.boundary_conditions
-                )
+                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=local_bcs)
 
                 self.sweep_solvers.append(
                     NonlinearVariationalSolver(
@@ -340,7 +352,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             {
                                 "snes_type": "newtonls",
                                 "snes_rtol": 1e-8,
-                                "ksp_type": "cg",
+                                "ksp_type": "preonly",
+                                "pc_type": "lu",
                             }
                             if not self.solver_parameters
                             else self.solver_parameters
@@ -371,6 +384,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         f = self.PDEs.f
 
         v = TestFunction(self.W)
+        v_split = split(v)
         u_k_act_tup = split(u_k_act)
         R_sweep = 0
 
@@ -384,7 +398,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             for i_m in range(self.M):
                 m = p + i_m * self.lenV
                 # As in my notes, each test function is independemt from the rest
-                v_m = v[m]
+                v_m = v_split[m]
                 # retrieve m-coordinate of the vector function
                 u_m = u_k_act_tup[m]
                 #  assemble the part with u^{k+1}. We have to be very carefull as
@@ -393,8 +407,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     inner(u_m, v_m)
                     - deltat
                     * self.scale
-                    * Q_D[m % self.M, m % self.M]
-                    * f_i(t0 + tau[m % self.M] * deltat, u_m, v_m)
+                    * Q_D[i_m, i_m]
+                    * f_i(t0 + tau[i_m] * deltat, u_m, v_m)
                 ) * dx  # f need to be composed with the change of variables
 
                 # assemble part with u^{k}
@@ -421,7 +435,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.R_sweep = [R_sweep]
 
         # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-        problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs)
+        problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs_W)
         self.sweep_solvers.append(
             NonlinearVariationalSolver(
                 problem_m,
@@ -429,7 +443,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     {
                         "snes_type": "newtonls",
                         "snes_rtol": 1e-8,
-                        "ksp_type": "cg",
+                        "ksp_type": "preonly",
+                        "pc_type": "lu",
                     }
                     if not self.solver_parameters
                     else self.solver_parameters

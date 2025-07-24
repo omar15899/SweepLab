@@ -128,7 +128,7 @@ for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
         M=M,
         Tfinal=T_FINAL,
         degree=deg,
-        is_parallel=False,
+        is_parallel=True,
         prectype=PREC_TYPE,
         full_collocation=True,
     )
