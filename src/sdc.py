@@ -336,14 +336,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                 self.R_sweep.append(R_sweep)
 
-                local_bcs = [
+                local_bcs = tuple(
                     bc.reconstruct(V=u_m.function_space())
                     for bc in self.bcs_V
-                    if (bc.function_space().index or 0) == (p % self.lenV)
-                ]
+                    if isinstance(bc, DirichletBC)
+                )
 
                 # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=local_bcs)
+                problem_m = NonlinearVariationalProblem(
+                    R_sweep, u_m, bcs=self.local_bcs
+                )
 
                 self.sweep_solvers.append(
                     NonlinearVariationalSolver(
@@ -414,16 +416,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 # assemble part with u^{k}
                 right = inner(u_0.subfunctions[m], v_m)
                 for j in range(self.M):
-                    coeff = (
-                        Q[m % self.M, j % self.M]
-                        - self.scale * Q_D[m % self.M, j % self.M]
-                    )
+                    jdx = p + j * self.lenV
+                    coeff = Q[i_m, j] - self.scale * Q_D[i_m, j]
                     right += (
                         deltat
                         * coeff
                         * f_i(
                             t0 + tau[j] * deltat,
-                            u_k_prev.subfunctions[j],
+                            u_k_prev.subfunctions[jdx],
                             v_m,
                         )
                     )
