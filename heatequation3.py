@@ -75,22 +75,22 @@ def solve_heat_pde(
         full_collocation=full_collocation,
     )
 
-    # solver.solve(Tfinal, nsweeps, u_exact)
+    solver.solve(Tfinal, nsweeps, u_exact, analysis=True)
     solver.solve(Tfinal, nsweeps)
 
 
-N_CELLS = [4, 8, 16, 25, 50, 100, 200, 400, 800]
-DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
-SWEEPS = [1, 2, 3, 4, 5, 6]
+# N_CELLS = [4, 8, 16, 25, 50, 100, 200, 400, 800]
+# DT_LIST = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+# SWEEPS = [1, 2, 3, 4, 5, 6]
 # DEGREE = [1, 2, 3, 4]
 
 
 N_CELLS = [8]
-DT_LIST = [1e-5]
-SWEEPS = [4]
+DT_LIST = [1e-2]
+SWEEPS = [6]
 DEGREE = [1]
 M = 6
-TFINAL = 1
+TFINAL = 0.5
 
 
 for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
@@ -101,7 +101,7 @@ for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
         M=M,
         Tfinal=TFINAL,
         is_parallel=False,
-        prectype="MIN-SR-NS",
+        prectype="MIN-SR-FLEX",
         degree=deg,
-        full_collocation=False,
+        full_collocation=True,
     )

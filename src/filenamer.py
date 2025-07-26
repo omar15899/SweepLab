@@ -141,6 +141,7 @@ class CheckpointAnalyser:
         self.checkpoint_list = self.list_checkpoints()
         if not self.checkpoint_list:
             raise Exception("No files to explore.")
+
         # create a list of the convergence results Path objects
         # self.json_list = [
         #     file[0].with_suffix("").as_posix() + "_convergence_results.json"
@@ -187,7 +188,7 @@ class CheckpointAnalyser:
                 continue
             # key = (int(m["n"]), float(m["dt"]), int(m["sw"]))
             key = tuple(
-                typename(m.group(name))
+                typename(m.group(name).replace("p", "."))
                 for typename, name in zip(self.keys_type, self.keys)
             )
             idx = int(m["idx"] or 0)
