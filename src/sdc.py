@@ -246,6 +246,84 @@ class SDCSolver(FileNamer, SDCPreconditioners):
     def _sweep(s):
         s.solve()
 
+    def _compute_analysis_metrics(
+        self,
+        real_u: Function | None,
+        use_collocation: bool,
+        use_exact: bool,
+    ) -> dict[str, float | None]:
+        """ """
+        residual_sweep_vecs = (
+            assemble(Rm).riesz_representation() for Rm in self.R_sweep
+        )
+        total_residual_sweep = sum(norm(r) for r in residual_sweep_vecs)
+
+        if use_collocation:
+            vec_coll = assemble(self.R_coll).riesz_representation()
+            total_residual_collocation = norm(vec_coll, norm_type="L2")
+        else:
+            total_residual_collocation = 0.0
+
+        if use_collocation:
+            sweep_vs_coll_err = errornorm(
+                self.u_collocation.subfunctions[-1],
+                self.u_k_act.subfunctions[-1],
+                norm_type="L2",
+            )
+            sweep_vs_coll_comp = sum(
+                errornorm(u_c, u_k, norm_type="L2")
+                for u_c, u_k in zip(
+                    self.u_collocation.subfunctions,
+                    self.u_k_act.subfunctions,
+                )
+            )
+        else:
+            sweep_vs_coll_err = None
+            sweep_vs_coll_comp = None
+
+        # Errors real solution
+        if use_exact and real_u is not None:
+            sweep_vs_real_err = errornorm(
+                real_u.subfunctions[-1],
+                self.u_k_act.subfunctions[-1],
+                norm_type="L2",
+            )
+            sweep_vs_real_comp = sum(
+                errornorm(r_u, u_k, norm_type="L2")
+                for r_u, u_k in zip(real_u.subfunctions, self.u_k_act.subfunctions)
+            )
+        else:
+            sweep_vs_real_err = None
+            sweep_vs_real_comp = None
+
+        # Collocation errors vs real
+        if use_collocation and use_exact and real_u is not None:
+            coll_vs_real_err = errornorm(
+                self.u_collocation.subfunctions[-1],
+                real_u.subfunctions[-1],
+                norm_type="L2",
+            )
+            coll_vs_real_comp = sum(
+                errornorm(u_c, r_u, norm_type="L2")
+                for u_c, r_u in zip(
+                    self.u_collocation.subfunctions, real_u.subfunctions
+                )
+            )
+        else:
+            coll_vs_real_err = None
+            coll_vs_real_comp = None
+
+        return {
+            "total_residual_sweep": total_residual_sweep,
+            "total_residual_collocation": total_residual_collocation,
+            "sweep_vs_collocation_errornorm": sweep_vs_coll_err,
+            "sweep_vs_collocation_compound_norm": sweep_vs_coll_comp,
+            "sweep_vs_real_errornorm": sweep_vs_real_err,
+            "sweep_vs_real_compound_norm": sweep_vs_real_comp,
+            "collocation_vs_real_errornorm": coll_vs_real_err,
+            "collocation_vs_real_compound_norm": coll_vs_real_comp,
+        }
+
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
     def _setup_full_collocation_solver(self):
         deltat, tau, t0, f = self.deltat, self.tau, self.t_0_subinterval, self.PDEs.f
@@ -548,107 +626,34 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                         if analysis:
                             _update_exact_field(t) if use_exact else None
-                            #############################################
-                            ############### Measuring errors ###############
-                            #############################################
-                            # print(f"step: {step}, time = {t}")
-                            # print("-------------------------------------------------")
-                            # RESIDUAL ERRORS
-
-                            # Sweep residual norm
-                            residual_sweep_vecs = (
-                                assemble(Rm).riesz_representation()
-                                for Rm in self.R_sweep
-                            )
-                            total_residual_sweep = sum(
-                                norm(r) for r in residual_sweep_vecs
-                            )
-
-                            # Collocation residual norm
-                            if use_collocation:
-                                residual_collocation = assemble(
-                                    self.R_coll
-                                ).riesz_representation()
-                                total_residual_collocation = norm(
-                                    residual_collocation, norm_type="L2"
-                                )
-                            else:
-                                residual_collocation = None
-                                total_residual_collocation = 0.0
-
-                            # ERROR SWEEP SOLUTION VS COLLOCATION ERROR VS SWEEP ERROR
-                            sweep_vs_collocation_errornorm = (
-                                errornorm(
-                                    self.u_collocation.subfunctions[-1],
-                                    self.u_k_act.subfunctions[-1],
-                                    norm_type="L2",
-                                )
-                                if use_collocation
-                                else None
-                            )
-
-                            sweep_vs_collocation_compound_norm = (
-                                _compound_norm(self.u_collocation, self.u_k_act)
-                                if use_collocation
-                                else None
-                            )
-
-                            sweep_vs_real_errornorm = (
-                                errornorm(
-                                    real_u.subfunctions[-1],
-                                    self.u_k_act.subfunctions[-1],
-                                    norm_type="L2",
-                                )
-                                if use_exact
-                                else None
-                            )
-
-                            sweep_vs_real_compound_norm = (
-                                _compound_norm(real_u, self.u_k_act)
-                                if use_exact
-                                else None
-                            )
-
-                            collocation_vs_real_errornorm = (
-                                errornorm(
-                                    self.u_collocation.subfunctions[-1],
-                                    real_u.subfunctions[-1],
-                                )
-                                if (use_exact and use_collocation)
-                                else None
-                            )
-
-                            collocation_vs_real_compound_norm = (
-                                _compound_norm(self.u_collocation, real_u)
-                                if (use_exact and use_collocation)
-                                else None
-                            )
-
-                            err_intra.append(
-                                float(sweep_vs_collocation_compound_norm)
-                                if use_collocation
-                                else None
-                            )
-
-                            print(
-                                f"Sweep vs collocation error norm: {sweep_vs_collocation_errornorm}"
+                            analysis_metrics = self._compute_analysis_metrics(
+                                real_u if use_exact else None,
+                                use_collocation,
+                                use_exact,
                             )
 
                             convergence_results[f"{step},{t},{k}"] = [
-                                total_residual_collocation,
-                                total_residual_sweep,
-                                sweep_vs_collocation_errornorm,
-                                sweep_vs_collocation_compound_norm,
-                                sweep_vs_real_errornorm,
-                                sweep_vs_real_compound_norm,
-                                collocation_vs_real_errornorm,
-                                collocation_vs_real_compound_norm,
+                                analysis_metrics["total_residual_collocation"],
+                                analysis_metrics["total_residual_sweep"],
+                                analysis_metrics["sweep_vs_collocation_errornorm"],
+                                analysis_metrics["sweep_vs_collocation_compound_norm"],
+                                analysis_metrics["sweep_vs_real_errornorm"],
+                                analysis_metrics["sweep_vs_real_compound_norm"],
+                                analysis_metrics["collocation_vs_real_errornorm"],
+                                analysis_metrics["collocation_vs_real_compound_norm"],
                             ]
 
-                            print(f"step {step}  t={t:.4e}  err_intra={err_intra}")
+                            err_intra.append(
+                                analysis_metrics["sweep_vs_collocation_compound_norm"]
+                                if use_collocation
+                                else None
+                            )
 
-                    # print("\n\n\n")
-                    print(f"step {step}  t={t:.4e}")
+                    print(
+                        f"step {step}  t={t:.4e}  "
+                        f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
+                        f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
+                    )
 
                     u_last_node = self.u_k_act.subfunctions[-1]
                     u_last_node.rename("u")
