@@ -236,6 +236,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         return tuple(bcs), local_bcs
 
+    @PETSc.Log.EventDecorator("sweep_loop_execution")
+    def _sweep_loop(self):
+        for s in self.sweep_solvers:
+            SDCSolver._sweep(s)
+
+    @PETSc.Log.EventDecorator("sweep_unique_execution")
+    @staticmethod
+    def _sweep(s):
+        s.solve()
+
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
     def _setup_full_collocation_solver(self):
         deltat, tau, t0, f = self.deltat, self.tau, self.t_0_subinterval, self.PDEs.f
@@ -466,8 +476,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         NEEDS_TO_BE_REARRANGED_FOR_CLARITY_PURPOSES
         """
 
-        # ------------------------------------------------------------------------
-        # Helper: interpolate exact solution at all collocation nodes
         def _update_exact_field(t_now: float):
             """
             interpolates the exact solution over all of the subtime intervals
@@ -480,14 +488,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 local_t = t_now + self.tau[m] * self.deltat
                 ru.interpolate(real_solution_exp(x, local_t))
 
-        # Helper: compound L2 norm across all subfunctions
         def _compound_norm(u: Function, v: Function) -> float:
             return sum(
                 errornorm(u_k, v_k, norm_type="L2")
                 for u_k, v_k in zip(u.subfunctions, v.subfunctions)
             )
 
-        # Helper: set scale for MIN-SR-FLEX or default
         def _set_scale(k: int):
             if self.prectype == "MIN-SR-FLEX":
                 self.scale.assign(1.0 / k)
@@ -537,8 +543,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     for k in range(1, sweeps + 1):
                         _set_scale(k)
                         self.u_k_prev.assign(self.u_k_act)
-                        for s in self.sweep_solvers:
-                            s.solve()
+                        # Calculate the new values
+                        self._sweep_loop()
 
                         if analysis:
                             _update_exact_field(t) if use_exact else None
