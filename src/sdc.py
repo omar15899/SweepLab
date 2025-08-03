@@ -30,7 +30,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         folder_name: str | None = None,
         path_name: str | None = None,
         mode: Literal["checkpoint", "vtk", "pdf"] = "checkpoint",
-        full_collocation: bool = False,
+        analysis: bool = False,
     ):
         """
         Mesh : Predermined mesh
@@ -72,7 +72,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.deltat = dt
         self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
-        self.full_collocation = full_collocation
+        self.analysis = analysis
 
         # Dealing with the whole system of pdes
         # Create the mixed Function space of all of them
@@ -149,7 +149,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             else self._setup_global_sweep_solver()
         )
 
-        self._setup_full_collocation_solver() if self.full_collocation else None
+        self._setup_full_collocation_solver() if self.analysis else None
 
     def _define_node_time_boundary_setup(self):
         """
@@ -544,7 +544,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         T,
         sweeps,
         real_solution_exp: Function | None = None,
-        analysis: bool = False,
     ):
         """
         real_solution_exp = ufl expression to be projected over the W space dependent
@@ -572,16 +571,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             else:
                 self.scale.assign(1.0)
 
-        use_collocation = self.full_collocation
+        analysis = self.analysis
         use_exact = real_solution_exp is not None
+        analysis = self.analysis
         write_vtk = self.mode == "vtk"
 
         t, step = 0.0, 0
+        err_intra = []
 
         if use_exact:
             real_u = Function(self.W, name="u_exact")
+            X0 = self.PDEs.coord
             for u in real_u.subfunctions:
-                u.interpolate(real_solution_exp(SpatialCoordinate(self.W.mesh()), t))
+                u.interpolate(real_solution_exp(X0, t))
 
         convergence_results = {
             "INFO": [
@@ -604,12 +606,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 while t < T:
 
                     # Solve the full collocation solver
-                    if use_collocation:
+                    if analysis:
                         self.collocation_solver.solve()
                         for u in self.u_0_collocation.subfunctions:
                             u.assign(self.u_collocation.subfunctions[-1])
-
-                    err_intra = []
 
                     # Apply the sweep
                     for k in range(1, sweeps + 1):
@@ -627,7 +627,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             _update_exact_field(t) if use_exact else None
                             analysis_metrics = self._compute_analysis_metrics(
                                 real_u if use_exact else None,
-                                use_collocation,
+                                analysis,
                                 use_exact,
                             )
 
@@ -644,7 +644,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                             err_intra.append(
                                 analysis_metrics["sweep_vs_collocation_compound_norm"]
-                                if use_collocation
+                                if analysis
                                 else None
                             )
 
@@ -657,9 +657,26 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                     u_last_node = self.u_k_act.subfunctions[-1]
                     u_last_node.rename("u")
+
                     afile.save_function(
                         u_last_node, idx=step, timestepping_info={"time": float(t)}
                     )
+
+                    # CAMBIO: si hay exacta/colocación, también se guardan (coherente con analysis y real_solution_exp).
+                    if use_exact:
+                        real_last = real_u.subfunctions[-1]
+                        real_last.rename("u_exact")
+                        afile.save_function(
+                            real_last, idx=step, timestepping_info={"time": float(t)}
+                        )
+
+                    if analysis:
+                        ucoll_last = self.u_collocation.subfunctions[-1]
+                        ucoll_last.rename("u_coll")
+                        afile.save_function(
+                            ucoll_last, idx=step, timestepping_info={"time": float(t)}
+                        )
+
                     for sub in (
                         *self.u_k_act.subfunctions,
                         *self.u_k_prev.subfunctions,
@@ -684,83 +701,93 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         else:
             vtk = VTKFile(self.file)
+            u_out = self.u_k_act.subfunctions[-1]
+            u_out.rename("u")
+
+            # CAMBIO: creamos escritores VTK específicos para colocación y exacta;
+            # en VTK no se usa 'afile' (que solo existe en checkpoint).
+            vtk_coll = (
+                VTKFile(Path(self.file).with_suffix("").as_posix() + "_ucoll.pvd")
+                if analysis
+                else None
+            )
+            vtk_exact = (
+                VTKFile(Path(self.file).with_suffix("").as_posix() + "_uexact.pvd")
+                if use_exact
+                else None
+            )
+
             while t < T:
+                print(f"step {step}  t={t:.4e}")
+
+                if analysis:
+                    self.collocation_solver.solve()
+                    for u in self.u_0_collocation.subfunctions:
+                        u.assign(self.u_collocation.subfunctions[-1])
+
+                    if vtk_coll is not None:
+                        vtk_coll.write(self.u_collocation.subfunctions[-1], time=t)
+
+                if use_exact:
+                    _update_exact_field(t)
+                    if vtk_exact is not None:
+                        vtk_exact.write(real_u.subfunctions[-1], time=t)
+
                 for k in range(1, sweeps + 1):
-                    # Solve the full collocation solver
-                    if use_collocation:
-                        self.collocation_solver.solve()
-                        for u in self.u_0_collocation.subfunctions:
-                            u.assign(self.u_collocation.subfunctions[-1])
+                    _set_scale(k)
+                    self.u_k_prev.assign(self.u_k_act)
 
-                    err_intra = []
+                    if analysis:
+                        self._sweep_loop()
+                    else:
+                        for s in self.sweep_solvers:
+                            s.solve()
 
-                    # Apply the sweep
-                    for k in range(1, sweeps + 1):
-                        _set_scale(k)
-                        self.u_k_prev.assign(self.u_k_act)
-                        # Calculate the new values
-                        if analysis:
-                            self._sweep_loop()
-                        else:
-                            for s in self.sweep_solvers:
-                                s.solve()
-                        vtk.write(self.u_k_act.subfunctions[-1], time=t)
+                    if analysis:
+                        _update_exact_field(t) if use_exact else None
+                        analysis_metrics = self._compute_analysis_metrics(
+                            real_u if use_exact else None,
+                            analysis,
+                            use_exact,
+                        )
+                        convergence_results[f"{step},{t},{k}"] = [
+                            analysis_metrics["total_residual_collocation"],
+                            analysis_metrics["total_residual_sweep"],
+                            analysis_metrics["sweep_vs_collocation_errornorm"],
+                            analysis_metrics["sweep_vs_collocation_compound_norm"],
+                            analysis_metrics["sweep_vs_real_errornorm"],
+                            analysis_metrics["sweep_vs_real_compound_norm"],
+                            analysis_metrics["collocation_vs_real_errornorm"],
+                            analysis_metrics["collocation_vs_real_compound_norm"],
+                        ]
+                        print(
+                            f"step {step}  t={t:.4e}  "
+                            f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
+                            f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
+                        )
 
-                        if analysis:
-                            _update_exact_field(t) if use_exact else None
-                            analysis_metrics = self._compute_analysis_metrics(
-                                real_u if use_exact else None,
-                                use_collocation,
-                                use_exact,
-                            )
+                vtk.write(u_out, time=t)
 
-                            convergence_results[f"{step},{t},{k}"] = [
-                                analysis_metrics["total_residual_collocation"],
-                                analysis_metrics["total_residual_sweep"],
-                                analysis_metrics["sweep_vs_collocation_errornorm"],
-                                analysis_metrics["sweep_vs_collocation_compound_norm"],
-                                analysis_metrics["sweep_vs_real_errornorm"],
-                                analysis_metrics["sweep_vs_real_compound_norm"],
-                                analysis_metrics["collocation_vs_real_errornorm"],
-                                analysis_metrics["collocation_vs_real_compound_norm"],
-                            ]
+                if analysis and vtk_coll is not None:
+                    vtk_coll.write(self.u_collocation.subfunctions[-1], time=t)
 
-                            err_intra.append(
-                                analysis_metrics["sweep_vs_collocation_compound_norm"]
-                                if use_collocation
-                                else None
-                            )
+                for sub in (
+                    *self.u_k_act.subfunctions,
+                    *self.u_k_prev.subfunctions,
+                    *self.u_0.subfunctions,
+                ):
+                    sub.assign(u_out)
 
-                            print(
-                                f"step {step}  t={t:.4e}  "
-                                f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
-                                f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
-                            )
-                    print("\n\n\n")
+                t += self.deltat
+                self.t_0_subinterval.assign(t)
+                if self.PDEs.time_dependent_constants_bts:
+                    for ct in self.PDEs.time_dependent_constants_bts:
+                        ct.assign(t)
+                step += 1
 
-                    u_last_node = self.u_k_act.subfunctions[-1]
-                    u_last_node.rename("u")
-                    afile.save_function(
-                        u_last_node, idx=step, timestepping_info={"time": float(t)}
-                    )
-                    for sub in (
-                        *self.u_k_act.subfunctions,
-                        *self.u_k_prev.subfunctions,
-                        *self.u_0.subfunctions,
-                    ):
-                        sub.assign(u_last_node)
-
-                    t += self.deltat
-                    self.t_0_subinterval.assign(t)
-                    if self.PDEs.time_dependent_constants_bts:
-                        for ct in self.PDEs.time_dependent_constants_bts:
-                            ct.assign(t)
-                    step += 1
-
-                convergence_results_path = (
-                    Path(self.file).with_suffix("").as_posix()
-                    + "_convergence_results.json"
-                )
-                with open(str(convergence_results_path), "w") as f:
-                    json.dump(convergence_results, f, indent=2)
-                return step - 1
+            convergence_results_path = (
+                Path(self.file).with_suffix("").as_posix() + "_convergence_results.json"
+            )
+            with open(str(convergence_results_path), "w") as f:
+                json.dump(convergence_results, f, indent=2)
+            return step - 1
