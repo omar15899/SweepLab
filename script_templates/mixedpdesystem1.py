@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
+
 from firedrake import *
 from itertools import product
 from src.sdc import SDCSolver  # tus módulos
@@ -105,7 +111,7 @@ def solve_mixed_heat_system(
         folder_name=f"MHE_{now}",
         path_name="/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/"
         "programming/solver/tests/heatfiles",  # cambia a tu ruta
-        full_collocation=full_collocation,
+        analysis=full_collocation,
         solver_parameters={
             "snes_type": "newtonls",
             "snes_rtol": 1e-8,

@@ -214,8 +214,8 @@ class CheckpointAnalyser:
         return mesh, hist, t_end, idx, func
 
     def load_df_from_json(self, filepath: Path):
-        # with open(str(filepath), "r") as f:
-        #     data = json.load(f)
+        with open(str(filepath), "r") as f:
+            data = json.load(f)
 
         # data.keys() = map(CheckpointAnalyser.split_convergence_results_json_keys(), data.keys())
         # return pd.DataFrame.from_dict(data, orient="index")

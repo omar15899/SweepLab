@@ -1,4 +1,10 @@
+import sys
 from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
+
+
 import re
 from itertools import product
 
@@ -8,7 +14,7 @@ from src.analysis import ConvergenceAnalyser
 
 # Define paths from which we are retrieving the results
 # and the structure of the files
-PATH = "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/tests/heatfiles/HE5_2025_07_24_03_20_53_copy"
+PATH = "/Users/omarkhalil/Desktop/Universidad/ImperialCollege/Project/programming/solver/tests/heatfiles/HE5_2025_08_01_14_02_06"
 
 # PATTERN = re.compile(
 #     r"^heat_n(?P<n>\d+)"
