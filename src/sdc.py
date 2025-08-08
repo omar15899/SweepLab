@@ -20,7 +20,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         mesh: Mesh,
         PDEs: PDESystem,
         M: int = 4,
-        N: int = 1,
         dt: int | float = 1e-3,
         is_parallel: bool = True,
         solver_parameters: dict | None = None,
@@ -607,9 +606,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                     # Solve the full collocation solver
                     if analysis:
-                        self.collocation_solver.solve()
                         for u in self.u_0_collocation.subfunctions:
                             u.assign(self.u_collocation.subfunctions[-1])
+
+                        self.collocation_solver.solve()
 
                     # Apply the sweep
                     for k in range(1, sweeps + 1):
