@@ -2,7 +2,7 @@ from typing import Iterable, Literal, List
 from pathlib import Path
 import json
 import numpy as np
-
+import time
 from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
@@ -72,6 +72,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
         self.analysis = analysis
+
+        # For time measuring, we define two list of dictionaries
+        self._sweep_meta: list[dict] = []
+        self._timings_buffer: list[dict] = []
 
         # Dealing with the whole system of pdes
         # Create the mixed Function space of all of them
@@ -184,8 +188,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         """
 
         if not self.PDEs.boundary_conditions:
-            return []
-
+            return ([], {})
         # if self.is_parallel:
         #     return list(self.PDEs.boundary_conditions)
 
@@ -237,8 +240,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("sweep_loop_execution")
     def _sweep_loop(self):
-        for s in self.sweep_solvers:
+        self._timings_buffer.clear()
+        for i, s in enumerate(self.sweep_solvers):
+            t0 = time.perf_counter()
             SDCSolver._sweep(s)
+            dt = time.perf_counter() - t0
+            self._timings_buffer.append(
+                {
+                    "solver_index": i,
+                    "wall_time": dt,
+                }
+            )
 
     @staticmethod
     @PETSc.Log.EventDecorator("sweep_unique_execution")
@@ -425,6 +437,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     right += deltat * coeff * f_value
 
                 right = right * dx
+
                 # Define the functional for that specific node
                 R_sweep = left - right
 
@@ -432,6 +445,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                 # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
                 problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_V)
+
+                # Add some parameters for analysis.
+                self._sweep_meta.append(
+                    {
+                        "solver_index": len(self.sweep_solvers),
+                        "comp": p,
+                        "node": m,
+                        "flat_idx": idx,
+                        "lenV": self.lenV,
+                    }
+                )
+
+                # Append the solver
                 self.sweep_solvers.append(
                     NonlinearVariationalSolver(
                         problem_m,
@@ -479,6 +505,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         Q_D = self.Q_D
 
         self.sweep_solvers = []
+        # Registrar meta único para el solver global
+        self._sweep_meta = [{"solver_index": 0, "global": True}]
         self.R_sweep = []
 
         for p, f_i in enumerate(f):
@@ -594,6 +622,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 "Sweep vs real compound norm",
                 "Collocation vs real error norm",
                 "Collocation vs real compound norm",
+                "T_seq",
+                "T_max",
             ]
         }
 
@@ -641,6 +671,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                 analysis_metrics["collocation_vs_real_errornorm"],
                                 analysis_metrics["collocation_vs_real_compound_norm"],
                             ]
+
+                            timings = []
+                            for row in self._timings_buffer:
+                                meta = next(
+                                    (
+                                        m
+                                        for m in self._sweep_meta
+                                        if m.get("solver_index") == row["solver_index"]
+                                    ),
+                                    {},
+                                )
+                                timings.append({**meta, **row})
+                            convergence_results[f"{step},{t},{k}_timings"] = timings
 
                             err_intra.append(
                                 analysis_metrics["sweep_vs_collocation_compound_norm"]
@@ -760,6 +803,20 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             analysis_metrics["collocation_vs_real_errornorm"],
                             analysis_metrics["collocation_vs_real_compound_norm"],
                         ]
+
+                        timings = []
+                        for row in self._timings_buffer:
+                            meta = next(
+                                (
+                                    m
+                                    for m in self._sweep_meta
+                                    if m.get("solver_index") == row["solver_index"]
+                                ),
+                                {},
+                            )
+                            timings.append({**meta, **row})
+                        convergence_results[f"{step},{t},{k}_timings"] = timings
+
                         print(
                             f"step {step}  t={t:.4e}  "
                             f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
