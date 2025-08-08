@@ -2,7 +2,7 @@ from typing import Iterable, Literal, List
 from pathlib import Path
 import json
 import numpy as np
-import pandas as pd
+
 from firedrake import *
 from firedrake.output import VTKFile
 from .preconditioners import SDCPreconditioners
