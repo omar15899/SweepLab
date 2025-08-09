@@ -627,6 +627,65 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             ]
         }
 
+        # ---------------- Guardado diádico (máx. 10k snapshots) ----------------
+        # Elegimos un stride como potencia de 2 para alinear tiempos entre runs diádicos.
+        # Se guarda como mucho 'save_max' estados (contando los regulares; T se fuerza).
+        save_max = 10_000
+        N_steps_total = int(np.ceil(T / float(self.deltat)))  # nº total de pasos
+        base_stride = max(1, int(np.ceil((N_steps_total + 1) / float(save_max))))
+        # potencia de 2 mínima >= base_stride
+        SAVE_STRIDE = 1 << (base_stride - 1).bit_length()
+
+        # Índice compacto de guardado (independiente de 'step') y bandera de T
+        save_idx = 0
+        wrote_T = False
+
+        def _maybe_save_checkpoint(afile, t_now: float):
+            """
+            Guardado sincronizado de u, u_exact, u_coll (si aplican) con índice save_idx.
+            """
+            nonlocal save_idx, wrote_T
+
+            u_last_node = self.u_k_act.subfunctions[-1]
+            u_last_node.rename("u")
+            afile.save_function(
+                u_last_node, idx=save_idx, timestepping_info={"time": float(t_now)}
+            )
+
+            if use_exact:
+                real_last = real_u.subfunctions[-1]
+                real_last.rename("u_exact")
+                afile.save_function(
+                    real_last, idx=save_idx, timestepping_info={"time": float(t_now)}
+                )
+
+            if analysis:
+                ucoll_last = self.u_collocation.subfunctions[-1]
+                ucoll_last.rename("u_coll")
+                afile.save_function(
+                    ucoll_last, idx=save_idx, timestepping_info={"time": float(t_now)}
+                )
+
+            if abs(t_now - T) <= 1e-12:
+                wrote_T = True
+            save_idx += 1
+
+        def _maybe_save_vtk(vtk, vtk_coll, vtk_exact, t_now: float):
+            """
+            Guardado sincronizado VTK en el tiempo t_now y actualización de índice.
+            """
+            nonlocal save_idx, wrote_T
+
+            vtk.write(self.u_k_act.subfunctions[-1], time=float(t_now))
+            if analysis and vtk_coll is not None:
+                vtk_coll.write(self.u_collocation.subfunctions[-1], time=float(t_now))
+            if use_exact and vtk_exact is not None:
+                vtk_exact.write(real_u.subfunctions[-1], time=float(t_now))
+
+            if abs(t_now - T) <= 1e-12:
+                wrote_T = True
+            save_idx += 1
+
         if not write_vtk:
             with CheckpointFile(self.file, "a") as afile:
                 # Save the mesh
@@ -698,41 +757,29 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             )
                     print("\n\n\n")
 
-                    u_last_node = self.u_k_act.subfunctions[-1]
-                    u_last_node.rename("u")
+                # --- Guardado diádico: solo cuando toca el stride ---
+                if (step % SAVE_STRIDE) == 0:
+                    _maybe_save_checkpoint(afile, t)
 
-                    afile.save_function(
-                        u_last_node, idx=step, timestepping_info={"time": float(t)}
-                    )
+                # Sincronizar estados entre subfunciones
+                u_last_node = self.u_k_act.subfunctions[-1]
+                for sub in (
+                    *self.u_k_act.subfunctions,
+                    *self.u_k_prev.subfunctions,
+                    *self.u_0.subfunctions,
+                ):
+                    sub.assign(u_last_node)
 
-                    # CAMBIO: si hay exacta/colocación, también se guardan (coherente con analysis y real_solution_exp).
-                    if use_exact:
-                        real_last = real_u.subfunctions[-1]
-                        real_last.rename("u_exact")
-                        afile.save_function(
-                            real_last, idx=step, timestepping_info={"time": float(t)}
-                        )
+                t += self.deltat
+                self.t_0_subinterval.assign(t)
+                if self.PDEs.time_dependent_constants_bts:
+                    for ct in self.PDEs.time_dependent_constants_bts:
+                        ct.assign(t)
+                step += 1
 
-                    if analysis:
-                        ucoll_last = self.u_collocation.subfunctions[-1]
-                        ucoll_last.rename("u_coll")
-                        afile.save_function(
-                            ucoll_last, idx=step, timestepping_info={"time": float(t)}
-                        )
-
-                    for sub in (
-                        *self.u_k_act.subfunctions,
-                        *self.u_k_prev.subfunctions,
-                        *self.u_0.subfunctions,
-                    ):
-                        sub.assign(u_last_node)
-
-                    t += self.deltat
-                    self.t_0_subinterval.assign(t)
-                    if self.PDEs.time_dependent_constants_bts:
-                        for ct in self.PDEs.time_dependent_constants_bts:
-                            ct.assign(t)
-                    step += 1
+            # --- Forzar guardado final en T si no cayó en el stride ---
+            if not wrote_T:
+                _maybe_save_checkpoint(afile, T)
 
                 convergence_results_path = (
                     Path(self.file).with_suffix("").as_posix()
