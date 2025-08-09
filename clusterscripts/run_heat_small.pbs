@@ -2,76 +2,83 @@
 #PBS -N run_heat_fast
 #PBS -q standard
 #PBS -l nodes=1:ppn=1,mem=1900mb,walltime=00:30:00
+#PBS -m bea
+#PBS -M ok24@ic.ac.uk
 #PBS -j oe
 #PBS -o /home/ma/o/ok24/logs/${PBS_JOBID}.log
-#PBS -m bea
-#PBS -M ok24@imperial.ac.uk      # <-- cámbialo si quieres otro correo
 #PBS -V
 
-# --- seguridad y trazas ---
 set -euo pipefail
-mkdir -p /home/clustor2/ma/o/ok24/logs
-exec >"/home/clustor2/ma/o/ok24/logs/${PBS_JOBID}.log" 2>&1
 set -x
+
+# --- logs ---
+mkdir -p /home/ma/o/ok24/logs
+exec >"/home/ma/o/ok24/logs/${PBS_JOBID}.log" 2>&1
 echo "[START] $(date) host=$(hostname) job=${PBS_JOBID} user=${USER}"
 
-# --- hilos BLAS/OpenMP a 1 (HPC-friendly) ---
+# --- hilos BLAS/OpenMP a 1 ---
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
        BLIS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
        GOTO_NUM_THREADS=1
 
-# --- activar firedrake del sistema ---
+# --- firedrake ---
 source /usr/local/firedrake/bin/activate
+which python3
+python3 -V
 
-# --- TODO EN CLUSTOR2 -------------------------------------------------------
-# Home "efectivo" y cachés en clustor2 (antes de importar firedrake)
-export HOME=/home/clustor2/ma/o/ok24
+# --- caches de usuario (antes de importar nada) ---
+export HOME=/home/ma/o/ok24
 export XDG_CACHE_HOME="$HOME/.cache"
 export PYOP2_CACHE_DIR="$XDG_CACHE_HOME/pyop2"
 export TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
 export TSFC_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
 export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
 export PYOP2_ALWAYS_REBUILD=1
-mkdir -p "$PYOP2_CACHE_DIR" "$TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"
+mkdir -p "$PYOP2_CACHE_DIR" "$TSFC_KERNEL_CACHE_DIR"
 
-# Resultados del solver (h5/json/vtk) también en clustor2
-export SDC_OUTPUT_DIR=/home/clustor2/ma/o/ok24/solver_results/heatfiles
-mkdir -p "$SDC_OUTPUT_DIR"
+# --- target NFS (clustor2) SOLO al final ---
+DEST_BASE=/home/clustor2/ma/o/ok24/solver_results/heatfiles
+mkdir -p "$DEST_BASE"
 
-# --- directorio de trabajo coherente (clustor2) ---
-cd /home/clustor2/ma/o/ok24
+# --- scratch local para HDF5 (evita NFS durante la ejecución) ---
+SCRATCH="${TMPDIR:-/tmp}/sdc-${USER}-${PBS_JOBID}"
+mkdir -p "$SCRATCH"
+echo "[SCRATCH] $SCRATCH"
 
-# --- versión de Python para diagnóstico ---
-which python3
-python3 -V
+# HDF5 en NFS a veces se bloquea por file locking
+export HDF5_USE_FILE_LOCKING=FALSE
 
-# --- lanzar tu script con entorno limpio (cerrar con PY, sin espacios) ---
-python3 - <<'PY'
-import os, pathlib, runpy
+# El solver escribirá en SCRATCH, luego copiamos a clustor2
+export SDC_OUTPUT_DIR="$SCRATCH"
 
-home = "/home/clustor2/ma/o/ok24"
-print("[PY] cwd =", os.getcwd())
+# --- directorio de trabajo principal ---
+cd /home/ma/o/ok24
+echo "[CWD] $(pwd)"
+echo "[ENV] SDC_OUTPUT_DIR=$SDC_OUTPUT_DIR"
 
-# Reafirmar caches dentro del intérprete (antes de importar firedrake)
-env = {
-    "XDG_CACHE_HOME": f"{home}/.cache",
-    "PYOP2_CACHE_DIR": f"{home}/.cache/pyop2",
-    "TSFC_KERNEL_CACHE_DIR": f"{home}/.cache/tsfc",
-    "TSFC_CACHE_DIR": f"{home}/.cache/tsfc",
-    "FIREDRAKE_TSFC_KERNEL_CACHE_DIR": f"{home}/.cache/tsfc",
-    "PYOP2_ALWAYS_REBUILD": "1",
-    "SDC_OUTPUT_DIR": f"{home}/solver_results/heatfiles",
-}
-os.environ.update(env)
-for k,v in env.items():
-    print(f"[PY] {k}={v}")
-for d in ("PYOP2_CACHE_DIR","TSFC_KERNEL_CACHE_DIR","XDG_CACHE_HOME"):
-    pathlib.Path(os.environ[d]).mkdir(parents=True, exist_ok=True)
-
-import firedrake
-print("[PY] firedrake OK")
-
-# Ejecuta tu solver (archivo ya copiado a clustor2)
-runpy.run_path("/home/clustor2/ma/o/ok24/clusterscripts/sdc_heat_equation.py", run_name="__main__")
-print("[PY] done.")
+# --- prueba rápida de Python ---
+python3 -u - <<'PY'
+print("[PY] hello ok")
 PY
+
+# --- asegurar firedrake OK ---
+python3 -u - <<'PY'
+print("[PY] importing firedrake...", flush=True)
+import firedrake
+print("[PY] firedrake OK", flush=True)
+PY
+
+# --- ejecutar solver (tu script NO se toca) ---
+echo "[RUN] sdc_heat_equation.py start"
+time python3 -u /home/ma/o/ok24/clusterscripts/sdc_heat_equation.py
+echo "[RUN] sdc_heat_equation.py end"
+
+# --- copiar SOLO resultados .h5 y .json a clustor2 ---
+echo "[COPY] to $DEST_BASE"
+# crear misma estructura que generó tu script: la carpeta ya viene dentro de SCRATCH
+rsync -av --include="*/" --include="*.h5" --include="*.json" --include='*_log.txt' --exclude="*" "$SCRATCH/"/ "$DEST_BASE/"/
+
+# --- limpieza de scratch ---
+rm -rf "$SCRATCH" || true
+
+echo "[END] $(date)"

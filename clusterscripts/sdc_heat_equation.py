@@ -1395,36 +1395,44 @@ def solve_heat_pde(
     solver.solve(Tfinal, nsweeps, real_exp)
 
 
-# =================== Parámetros por defecto (demo) ===================
+# --- al final de sdc_heat_equation.py ---
 if __name__ == "__main__":
-    # Mac: no definas SDC_OUTPUT_DIR y se usará ~/solver_results/heatfiles/<prectype>_<par|global>/run_XXXX
-    # Clúster: export SDC_OUTPUT_DIR=/home/clustor2/ma/<u>/<user>/solver_results/heatfiles  (opcional)
-    #          Si no lo defines pero tu $HOME real está en clustor2, lo detectará igual.
+    import os, json
 
-    N_CELLS_LIST = [8]
-    DT_LIST = [5e-2]
-    SWEEPS_LIST = [6]
-    DEGREE_LIST = [1]
-    M_NODES = [6]
-    TFINAL_LIST = [0.1]
+    # Si el PBS nos ha pasado parámetros, los usamos; si no, caemos a tus defaults
+    cfg = os.environ.get("SDC_PARAMS_JSON")
+    if cfg:
+        p = json.loads(cfg)
+        # OBLIGATORIO: M = sweeps
+        assert int(p["M"]) == int(p["sweeps"]), "M debe igualar a sweeps"
 
-    for n, dt, sw, deg, M in product(
-        N_CELLS_LIST, DT_LIST, SWEEPS_LIST, DEGREE_LIST, M_NODES
-    ):
-        # Ejecuta ambas variantes: paralelo (residual "par") y global (residual "global")
-        for is_par in (True, False):
-            for prectype in ("MIN-SR-FLEX", "MIN-SR-NS"):
-                solve_heat_pde(
-                    dt=dt,
-                    n_cells=n,
-                    nsweeps=sw,
-                    M=M,
-                    Tfinal=TFINAL_LIST[0],
-                    is_parallel=is_par,
-                    prectype=prectype,
-                    degree=deg,
-                    analysis=True,  # guarda también *_convergence_results.json
-                    mode="checkpoint",  # "checkpoint" recomendado en clúster
-                    folder_name=None,  # usa auto numeración: <prectype>_<par|global>/run_XXXX
-                    path_name=None,  # base: arg -> SDC_OUTPUT_DIR -> clustor2 -> Mac -> ~/sdc_runs
-                )
+        solve_heat_pde(
+            dt=float(p["dt"]),
+            n_cells=int(p["n_cells"]),
+            nsweeps=int(p["sweeps"]),  # = M
+            M=int(p["M"]),
+            Tfinal=float(p["Tfinal"]),
+            is_parallel=bool(p["is_parallel"]),
+            prectype=str(p["prectype"]),
+            degree=int(p.get("degree", 1)),
+            analysis=bool(p.get("analysis", True)),
+            mode=str(p.get("mode", "checkpoint")),
+            folder_name=p.get("folder_name"),
+            path_name=p.get("path_name"),
+        )
+    else:
+        # <<< tu bloque de pruebas local por defecto, si quieres >>>
+        solve_heat_pde(
+            dt=5e-2,
+            n_cells=8,
+            nsweeps=6,
+            M=6,
+            Tfinal=0.1,
+            is_parallel=True,
+            prectype="MIN-SR-FLEX",
+            degree=1,
+            analysis=True,
+            mode="checkpoint",
+            folder_name=None,
+            path_name=None,
+        )

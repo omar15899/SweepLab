@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# run_heat_big_auto.pbs — autoelige cola libre, crea array y corre par+global por combo
+
+set -euo pipefail
+
+# ------------------------ FASE PRE-SUBMIT ------------------------
+if [[ -z "${PBS_JOBID:-}" ]]; then
+  # 1) Total de combinaciones (Ncells: 2..512 potencias de 2; dt: 1e-1..1e-5; M=sweeps: 1..10)
+  TOTAL=$(python3 - <<'PY'
+NCELLS=[2,4,8,16,32,64,128,256,512]
+DT=[1e-1,1e-2,1e-3,1e-4,1e-5]
+M=list(range(1,11))
+print(len(NCELLS)*len(DT)*len(M))
+PY
+)
+
+  # 2) Elegir UNA cola entre {medium, jumbo, firedrake, standard} con menor carga (RUN+QUE)
+  choose_queue() {
+    local pref=("medium" "jumbo" "firedrake" "standard")
+    declare -A load
+    while read -r q mem cpu wt node run que lm state || [[ -n "${q:-}" ]]; do
+      [[ -z "${q:-}" || "${q}" == "Queue" || "${q}" == "-----" ]] && continue
+      case "$q" in
+        medium|jumbo|firedrake|standard) load["$q"]=$(( run + que ));;
+      esac
+    done < <(qstat -Q 2>/dev/null || true)
+
+    local best="standard" min=999999
+    for q in "${!load[@]}"; do
+      if (( ${load[$q]} < min )); then min=${load[$q]}; best=$q; fi
+    done
+    # desempate por preferencia fija
+    for p in "${pref[@]}"; do
+      [[ "$p" == "$best" ]] && { echo "$best"; return; }
+    done
+    echo "$best"
+  }
+  Q=$(choose_queue)
+  echo "-> Enviando ARRAY de $TOTAL tareas a la cola: $Q (máx. 64 simultáneas)"
+
+  # 3) Auto-qsub (1 core, 1900 MB por política del cluster)
+  exec qsub -q "$Q" \
+    -N run_heat_big \
+    -l nodes=1:ppn=1,mem=1900mb \
+    -m bea -M ok24@ic.ac.uk \
+    -j oe \
+    -o /home/ma/o/ok24/logs/\$PBS_JOBID.log \
+    -t 0-$((TOTAL-1))%64 \
+    "$0"
+fi
+# ------------------------ FASE JOB (ARRAY) ------------------------
+
+set -x
+echo "[START] $(date) host=$(hostname) job=${PBS_JOBID} arr=${PBS_ARRAYID:-0} user=${USER}"
+
+# Hilos BLAS/OpenMP a 1
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+       BLIS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+       GOTO_NUM_THREADS=1
+
+# Activa Firedrake
+source /usr/local/firedrake/bin/activate
+
+# Caches de usuario
+export HOME=/home/ma/o/ok24
+export XDG_CACHE_HOME="$HOME/.cache"
+export PYOP2_CACHE_DIR="$XDG_CACHE_HOME/pyop2"
+export TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export TSFC_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export PYOP2_ALWAYS_REBUILD=1
+mkdir -p "$PYOP2_CACHE_DIR" "$TSFC_KERNEL_CACHE_DIR" /home/ma/o/ok24/logs
+
+# Trabajo coherente
+cd /home/ma/o/ok24
+which python3 && python3 -V
+
+# Staging rápido local + destino final en clustor2
+STAGE="/tmp/sdc-${USER}-${PBS_JOBID}.${PBS_ARRAYID:-0}"
+DEST="/home/clustor2/ma/o/ok24/solver_results/heatfiles"
+mkdir -p "$STAGE" "$DEST"
+export SDC_OUTPUT_DIR="$STAGE"   # el solver escribirá aquí; luego rsync al DEST
+
+# Mapea índice del array -> (n, dt, M) y lanza 4 variantes: (prectype x residual)
+python3 -u - <<'PY'
+import os, json
+from itertools import product
+
+# Rejillas pedidas por ti
+NCELLS=[2,4,8,16,32,64,128,256,512]
+DT=[1e-1,1e-2,1e-3,1e-4,1e-5]
+M=list(range(1,11))           # M = número de nodos = número de sweeps
+TFINAL=1.0
+DEGREE=1
+
+idx = int(os.environ.get("PBS_ARRAYID","0"))
+combos = list(product(NCELLS, DT, M))
+assert 0 <= idx < len(combos), (idx, len(combos))
+n, dt, m = combos[idx]
+sweeps = m
+
+print(f"[ARR] idx={idx}  n={n}  dt={dt}  M={m}  sweeps={sweeps}")
+
+# RUN_ID único por tarea de array (evita colisiones de run_XXXX entre jobs)
+run_id = f"run_{int(os.environ.get('PBS_ARRAYID','0')):04d}"
+
+base_path = os.environ.get("SDC_OUTPUT_DIR", "/tmp")
+variants = []
+for prectype in ("MIN-SR-FLEX", "MIN-SR-NS"):
+    for is_par in (True, False):
+        residual = "par" if is_par else "global"
+        group = f"{prectype}_{residual}"
+        folder_name = f"{group}/{run_id}"   # fija numeración = sin colisiones
+        params = {
+            "n_cells": n,
+            "dt": dt,
+            "M": m,
+            "sweeps": sweeps,           # por si tu main lo usa
+            "Tfinal": TFINAL,
+            "degree": DEGREE,
+            "is_parallel": is_par,
+            "prectype": prectype,
+            "analysis": True,           # guarda *_convergence_results.json
+            "mode": "checkpoint",
+            "folder_name": folder_name,
+            "path_name": base_path,
+        }
+        variants.append(params)
+
+# Ejecuta las 4 variantes secuencialmente dentro de la misma tarea
+for v in variants:
+    os.environ["SDC_PARAMS_JSON"] = json.dumps(v)
+    print("[RUN]", v)
+    # Ruta de tu script en clustor2
+    import runpy
+    runpy.run_path("/home/clustor2/ma/o/ok24/clusterscripts/sdc_heat_equation.py", run_name="__main__")
+print("[PY] all variants done.")
+PY
+
+echo "[COPY] to $DEST"
+rsync -av --include='*/' --include='*.h5' --include='*.json' --exclude='*' "$STAGE"/ "$DEST"/ || true
+rm -rf "$STAGE" || true
+
+echo "[END] $(date)"
