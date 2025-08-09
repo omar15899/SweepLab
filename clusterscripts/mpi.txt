@@ -1,0 +1,18 @@
+# 1) (opcional) re-activa el venv correcto
+source ../venv-firedrake/bin/activate
+
+# 2) hilos controlados
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export PYOP2_CACHE_DIR="$HOME/.cache/pyop2"
+
+# 3) baseline 1 proceso (macOS: sin binding)
+/usr/bin/time -lp \
+mpiexec -n 1 --bind-to none \
+python clusterscripts/sdc_MIN_RES_FLEX_PARALELL.py
+
+# 4) 6 procesos (6 subdominios)
+/usr/bin/time -lp \
+mpiexec -n 6 --bind-to none \
+python clusterscripts/sdc_MIN_RES_FLEX_PARALELL.py

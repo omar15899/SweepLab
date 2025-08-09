@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Literal
 from firedrake import *
@@ -300,7 +301,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         mesh: Mesh,
         PDEs: PDESystem,
         M: int = 4,
-        N: int = 1,
         dt: int | float = 1e-3,
         is_parallel: bool = True,
         solver_parameters: dict | None = None,
@@ -353,6 +353,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
         self.analysis = analysis
+
+        # For time measuring, we define two list of dictionaries
+        self._sweep_meta: list[dict] = []
+        self._timings_buffer: list[dict] = []
 
         # Dealing with the whole system of pdes
         # Create the mixed Function space of all of them
@@ -465,8 +469,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         """
 
         if not self.PDEs.boundary_conditions:
-            return []
-
+            return ([], {})
         # if self.is_parallel:
         #     return list(self.PDEs.boundary_conditions)
 
@@ -518,8 +521,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("sweep_loop_execution")
     def _sweep_loop(self):
-        for s in self.sweep_solvers:
+        self._timings_buffer.clear()
+        for i, s in enumerate(self.sweep_solvers):
+            t0 = time.perf_counter()
             SDCSolver._sweep(s)
+            dt = time.perf_counter() - t0
+            self._timings_buffer.append(
+                {
+                    "solver_index": i,
+                    "wall_time": dt,
+                }
+            )
 
     @staticmethod
     @PETSc.Log.EventDecorator("sweep_unique_execution")
@@ -706,6 +718,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     right += deltat * coeff * f_value
 
                 right = right * dx
+
                 # Define the functional for that specific node
                 R_sweep = left - right
 
@@ -713,6 +726,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                 # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
                 problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_V)
+
+                # Add some parameters for analysis.
+                self._sweep_meta.append(
+                    {
+                        "solver_index": len(self.sweep_solvers),
+                        "comp": p,
+                        "node": m,
+                        "flat_idx": idx,
+                        "lenV": self.lenV,
+                    }
+                )
+
+                # Append the solver
                 self.sweep_solvers.append(
                     NonlinearVariationalSolver(
                         problem_m,
@@ -760,6 +786,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         Q_D = self.Q_D
 
         self.sweep_solvers = []
+        # Registrar meta único para el solver global
+        self._sweep_meta = [{"solver_index": 0, "global": True}]
         self.R_sweep = []
 
         for p, f_i in enumerate(f):
@@ -875,6 +903,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 "Sweep vs real compound norm",
                 "Collocation vs real error norm",
                 "Collocation vs real compound norm",
+                "T_seq",
+                "T_max",
             ]
         }
 
@@ -887,9 +917,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                     # Solve the full collocation solver
                     if analysis:
-                        self.collocation_solver.solve()
                         for u in self.u_0_collocation.subfunctions:
                             u.assign(self.u_collocation.subfunctions[-1])
+
+                        self.collocation_solver.solve()
 
                     # Apply the sweep
                     for k in range(1, sweeps + 1):
@@ -921,6 +952,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                 analysis_metrics["collocation_vs_real_errornorm"],
                                 analysis_metrics["collocation_vs_real_compound_norm"],
                             ]
+
+                            timings = []
+                            for row in self._timings_buffer:
+                                meta = next(
+                                    (
+                                        m
+                                        for m in self._sweep_meta
+                                        if m.get("solver_index") == row["solver_index"]
+                                    ),
+                                    {},
+                                )
+                                timings.append({**meta, **row})
+                            convergence_results[f"{step},{t},{k}_timings"] = timings
 
                             err_intra.append(
                                 analysis_metrics["sweep_vs_collocation_compound_norm"]
@@ -1040,6 +1084,20 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             analysis_metrics["collocation_vs_real_errornorm"],
                             analysis_metrics["collocation_vs_real_compound_norm"],
                         ]
+
+                        timings = []
+                        for row in self._timings_buffer:
+                            meta = next(
+                                (
+                                    m
+                                    for m in self._sweep_meta
+                                    if m.get("solver_index") == row["solver_index"]
+                                ),
+                                {},
+                            )
+                            timings.append({**meta, **row})
+                        convergence_results[f"{step},{t},{k}_timings"] = timings
+
                         print(
                             f"step {step}  t={t:.4e}  "
                             f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
@@ -1080,9 +1138,12 @@ now = datetime.now()
 time_str = now.strftime("%Y_%m_%d_%H_%M_%S")
 
 # Carpeta por defecto en almacenamiento grande
-DEFAULT_OUTPUT_DIR = Path("/scratchcomp01/ok24")
-(DEFAULT_OUTPUT_DIR / "solver_results" / "heatfiles").mkdir(parents=True, exist_ok=True)
-# (ROOT_DIR / "solver_results" / "heatfiles").mkdir(parents=True, exist_ok=True)
+DEFAULT_OUTPUT_DIR = Path("/home/ma/o/ok24")
+### PARA CLUSTER
+# (DEFAULT_OUTPUT_DIR / "solver_results" / "heatfiles").mkdir(parents=True, exist_ok=True)
+
+### PARA MAC
+(ROOT_DIR / "solver_results" / "heatfilenanos").mkdir(parents=True, exist_ok=True)
 
 
 def solve_heat_pde(
@@ -1108,17 +1169,20 @@ def solve_heat_pde(
     )
 
     folder_name = folder_name or "HE_" + time_str
-    path_name = (
-        path_name
-        or os.environ.get("SDC_OUTPUT_DIR")
-        or str(DEFAULT_OUTPUT_DIR / "solver_results" / "heatfiles")
-    )
 
+    ### PARA CLUSTER
     # path_name = (
     #     path_name
     #     or os.environ.get("SDC_OUTPUT_DIR")
-    #     or str(Path.home() / "solver_results" / "heatfiles")
+    #     or str(DEFAULT_OUTPUT_DIR / "solver_results" / "heatfiles")
     # )
+
+    ### PARA MAC
+    path_name = (
+        path_name
+        or os.environ.get(" el tema ")
+        or str(Path.home() / "solver_results" / "heatfiles")
+    )
 
     mesh = IntervalMesh(n_cells, length_or_left=0.0, right=1.0)
     X = SpatialCoordinate(mesh)
@@ -1173,7 +1237,7 @@ def solve_heat_pde(
 
 
 N_CELLS = [8]
-DT_LIST = [1e-4]
+DT_LIST = [5e-2]
 SWEEPS = [6]
 DEGREE = [1]
 M = 6

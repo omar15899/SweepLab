@@ -1,0 +1,581 @@
+The Maths NextGen Compute Cluster
+
+Latest cluster news
+
+What is the NextGen Compute Cluster?
+
+the NextGen cluster
+
+The NextGen cluster
+Replacing the original Maths compute cluster first introduced in late 2010, the NextGen Compute Cluster is a HPC (High Performance Compute) cluster of 34 Linux compute servers providing 832 processors plus additional servers for test & development purposes on which anyone in Mathematics may run short or lengthy computation jobs, either singly or in parallel. The cluster is a batch-mode cluster - it operates by accepting compute jobs which you submit to it, putting them into one of several queues available to you and then running them for you when the resources needed for your job are available.
+Just a quick note on some cluster terminology before we get deeper into this:
+a job is simply a program that you want the cluster to run for you; it might be one you've written yourself in C or Python, or it could be a Matlab, R, Maple, Sage, Magma, etc program or script
+a node is just another name for a single compute server within the cluster
+resources are the computing resources the cluster needs to run your job, such as the amount of memory required and the number of CPU processor cores, CPUs or even nodes required to run your job
+Once you have submitted a job to the cluster, you can walk away knowing the cluster will run your job for you, usually immediately although if the cluster is busy or you have asked for a lot of resources such as 16 CPU cores or 384 gigabytes of memory, then your job will be held in the queue until other users' jobs complete, freeing up these resources. Optionally, you can also ask the cluster to notify you by email when your job starts, finishes or is aborted for any reason.
+Using batch mode clusters for your computing make things a lot easier for you since you no longer have to choose which system to use, worry about whether there is enough memory available or if there are too many users already using that system or having to stay logged into a remote computer while your job is running, which can often be difficult to do. And from the cluster's point of view it means system resources across the whole cluster are allocated evenly & fairly between users and avoids individual servers/nodes being overloaded. One of the nice things about the cluster is it shields you from the hardware that actually runs your job or program so you don't need to make any decisions - the queuing system does this for you, matching your job to the available resources to make the most efficient use of the available hardware. So details of this cluster's hardware are largely irrelevant - it's just a large pool of servers as far as you, the user, is concerned. In fact, it's a 'private cloud'. Since its establishment 13 years ago, additional nodes have been added on several occasions all with slightly different specifications owing to improvements in server design, etc and older nodes have been replaced with newer ones.
+Once you have got used to using a cluster like NextGen, you will probably never want to go back to the old way of doing things by running programs in interactive sessions! (If you really do need to do things the old-fashioned way, if you need to use a program interactively such as the graphical interfaces of Matlab, Maple, etc or if you want to test your program before running it on the cluster, you can use the submission node macomp001 to do this - this does not itself run under job control).
+Finally, since the Maths compute cluster is for you, the user, we have always had a policy of openness and accessibility and you will find the Maths HPC is very user-oriented; additional software can be installed upon request to support individual user's requirements and users are not constrained to using particular compilers or packages, for example. Also, this cluster does not impose the CPU or 'wall time' (that is, 'real' chronological time) limits that other HPC clusters do; the default maximum compute time is 100 days but can be made infinite; contrast this with the 48 or 72 hour limits of other HPC clusters at Imperial College. If your research needs are unusual, complex or difficult to implement, we want to hear about it as in all probability the answer is "Yes, now what's the question?"
+We hope you will enjoy using the job queueing system - no more having to log in at weekends to see if a job has finished or getting up in the night to start off another compute job!
+What does the cluster consist of?
+
+With the exception of macomp17, macomp19, macomp31 & macomp32 all of the nodes in the cluster are 64-bit systems with dual Xeon CPUs containing between 4 and 10 processor cores in each CPU, between 16 and 256 GB of memory plus up to 120 TB of networked storage. The macomp17, macomp19, macomp31 & macomp32 nodes are a little different in that they have four AMD Opteron 64-bit CPUs each with 16 processor cores for a total of 64 cores on these nodes and 512 GB memory (256 GB memory in macomp19). All nodes run Ubuntu Linux LTS (Long Term Support) server edition 22.04 and a comprehensive range of mathematical applications such as Matlab, Maple, R, etc is installed as well as development tools, libraries, compilers, editors, debuggers and so on; software is a mix of Ubuntu packages (with Python modules now sourced directly from PyPI repositories rather than Ubuntu packages), locally-built bespoke software and user-built programs. What you will not find on these nodes are web browsers, office suites, music and movie players and games! These are not desktop systems and are intended purely for 'real' computing.
+The cluster comprises:
+32 nodes macomp01 to macomp32 inclusive
+2 submission nodes macomp001 & macomp002
+1 cluster management server openpbs
+2 user file storage servers clustor2 & clustor2-backup
+Unlike the original cluster, NextGen is a true HPC - jobs are submitted only through the submission node, macomp001, and direct access to individual compute nodes within the cluster from the college network are not possible. An additional 1000 GB disk is fitted to most nodes (but not macomp17-19 nor macomp30-32) which users can use as a 'scratch' disk for additional storage - each of these scratch disks is cross-mounted on every other node in the cluster and they are named after the node that physically contains them:
+scratchcomp01 to scratchcomp16 inclusive refers to the 1000 GB scratch disks in macomp01 to macomp16 respectively
+scratchcomp20 to scratchcomp29 inclusive refers to the 1000 GB scratch disks in macomp20 to macomp29 respectively
+Managing the cluster job scheduling system is openpbs which runs the Torque job management software in conjunction with the Maui scheduler. In addition, a MySQL database is used on this server for user job accounting purposes and for storing Torque status reports in SQL form for the web interface that can be accessed at http://openpbs.ma.ic.ac.uk, which provides useful cluster utilities and information.
+The two storage servers in this cluster provide a large amount of fast local data storage for users and can optionally be used alongside - or instead of - the central ICNFS storage. Running FreeBSD 11.3, each contains 14 disks - 2 mirrored system disks, 9 x 8TB data disks plus one hot spare and a pair of SSDs used to accelerate read/write performance of the ZFS storage pools used by these servers. These servers use lz4 real-time data compression internally so although the conventional (or 'hard') data storage capacity is around 60TB, it actually stores around 160TB as seen by users. clustor2 is the current 'live' server while clustor2-backup mirrors clustor2 early every morning and provides a backup.
+Accommodated in a new part of ICT's data centre in the City & Guilds (C&G) building, this self-contained cluster still has access to user storage on both the central ICNFS service and on Maths' servers in the Huxley server room.
+How do I access it?
+
+Before you start, three important points:
+
+First: from this point onwards it is assumed you have a Maths UNIX account and some basic knowledge of using Linux on the command line; if not, head over here for a quick introduction. Note: Maths UNIX accounts are now automatically set up by ICT user registration for new undergraduate and postgraduate students when they join the Maths department but for some reason, this doesn't always extend to new staff or postdocs. If in doubt, try logging into macomp001.ma.ic.ac.uk using your College username and password; if you can't log in then you don't have a Maths UNIX account so please ask for one to be set up for you.
+Second: if you intend testing a program you have written or a Matlab/Maple/R script on the clusters, possibly with a view to submitting it to the cluster later, please use the submission server macomp001.
+Third: if you want to use the job queueing system (as you should if you want to make the most of the cluster or use more than 30 minutes of CPU time) please make sure you have set up your ssh client to connect without a password and run the update-ssh-known-hosts script BEFORE you submit any jobs to the cluster. (If you don't do this, your job(s) might run but the queueing system won't be able to write output or error messages into your home directory and you will receive emails from the system explaining why your job has produced no obvious output. Your output will actually be saved in an emergency storage area accessible to the cluster administrator and can, if required, be copied or moved to another location on the cluster, such as a scratch disk, from which you can retrieve or delete your output).
+Please note: you only need to run the update-ssh-known-hosts script once when you start using this cluster, before you submit your first job and you will not need to run it ever again unless you either change or delete your cluster ssh keypair or delete your ~/.ssh/known_hosts file.
+To access the compute cluster, you simply need to log into macomp001 using ssh, the Secure SHell communications protocol for remote shell access, using your college username and password. ssh client software is available for almost all computers - Linux, UNIX and Mac computers running OS X will already have ssh bundled with the operating system but you will have to install a ssh client on Windows PCs, tablets and phones. You'll find all you need to know about ssh here along with a link to download a free ssh client for Windows and the rest of these notes assume you have a working ssh client and know how to use it.
+If you are connecting from another Linux or UNIX computer in Mathematics and your username on that system is the same as your college username, to log into macomp001 you can omit your username from the ssh command and just type:
+ssh macomp001
+in a terminal, shell or xterm to connect to macomp001 and log in. This is because Maths Linux systems 'know' that they are within the same ma.ic.ac.uk (or ma.imperial.ac.uk) domain and they can simply refer to other systems by their hosthame rather than their full Internet host address but if you are connecting from a system outside the Department of Mathematics, you will need to append the domain ma.ic.ac.uk or ma.imperial.ac.uk to the node's name as shown:
+ssh macomp001.ma.ic.ac.uk
+or ssh macomp001.ma.imperial.ac.uk
+If your username on the computer you are connecting from is different from your college username, then you'll have to tell your ssh client to use your college username instead to connect to a cluster node; in this example, your college username might be 'jbloggs' so you would type:
+ssh jbloggs@macomp001.ma.ic.ac.uk
+or ssh jbloggs@macomp001.ma.imperial.ac.uk
+If you are logging into the compute cluster from Windows, then you can use PuTTY or SecureWinShell to do this but do remember that you will always have to give the full Internet address of the computer you wish to connect to, eg macomp001.ma.ic.ac.uk since you will not be able to use the short host address even on Windows PCs within the department, since Windows computers are not normally set up to have any knowledge of their default, local DNS domain name (although this can be done if desired).
+Once you have logged into macomp001, you can use the node just as you would if you were sitting in front of any other Linux system with a screen and keyboard and a terminal open. In nearly all cases you will want to run a compute job on one of the queues - if you instead want to create a Matlab or Maple script, or write and compile a program in C, Fortran or Python, etc to be run on the cluster later, you can also do this on macomp001. You do these tasks in exactly the same way as you usually do on a 'local' Linux system and then when you want to run the program to test it, you can either start it as a normal 'foreground' task and remain logged in for as long as you like or you can start it as a 'background' job and then continue doing other things on the cluster system or log out altogether and leave your program running. Assuming your executable program is called myprogram, and that you are already in the same directory as where myprogram resides, typing:
+./myprogram
+will start the program running and will keep your login terminal session connected to the job you are running - you will have full interactive control over the program and will usually be able to terminate it by typing crtl-C or crtl-\ but if you disconnect from the compute cluster by ending your ssh connection, your program will stop running. But of you append & to your program start command:
+./myprogram &
+you will detach your program from your controlling shell and put it into the background; your shell command prompt will return and you can either do other things - even start different programs and put them into background mode - or log out, leaving all of your program(s) still running.
+Where are my files?
+
+Your files and folders are in your cluster home directory which is the directory you are in when you log into the cluster. By default, your cluster home directory uses storage on the ICNFS service, the college's central Linux home directory server, which provides the Linux equivalent of your Windows H: drive and this is also where your program output will be stored. ICNFS storage is created when a Maths UNIX account is set up for you and is mounted on each of the Maths compute cluster nodes; if you don't already have a Maths UNIX account, please ask for one to be set up for you because without it, you will not have a Linux home directory nor will you be able to log into or use the cluster. You also have additional storage on both clustor and clustor2 which are large fileservers in Maths and you can opt for your cluster home directory to use either of these instead of ICNFS.
+Your ICNFS home directory is subject to a disk usage quota, or simply 'the quota'. This is amount of space you have been allocated on the ICT ICNFS server and varies from user to user although most users have the default 400 MB quota. Unfortunately, owing to changes that have recently been made to the ICNFS service, it is no longer possible to use the 'quota' command find out how much quota you have been assigned.
+Although ICNFS-backed storage satisfies most users' needs, it's not particularly well-suited for HPC work owing to limited capacity and relatively slow read/write performance and if you plan on working with a lot of data or want your jobs to run quickly, consider using clustor2 storage which is much faster and has no disk quotas imposed.
+Introducing job queuing
+
+Cluster job management used to be regarded with deep suspicion by users in the same way that workforces are often distrustful of management - what could be simpler than logging into a computer and running your program? True, but what if everyone logged into the biggest and fastest systems available and ran their jobs there - these systems would slow to a crawl, memory and eventually disk swap space would be used up and the system crashes with the loss of everyone's output, while slower systems are still up & running, but idle.
+Job management avoids this by putting all the compute servers into a logical pool, automatically routing jobs to individual nodes that have the resources to run the job. If the resources your job needs are not currently available on any node in the pool. the job is held in a queue - that is, it is deferred and run later when resources do become available, which may be minutes or hours later. Optionally, you can choose to receive an email from the system letting you know when your job actually starts, when it finishes and even be notified if it is aborted owing to some problem.
+Queueing jobs has other advantages - you do not have to submit jobs to the cluster one at a time and wait for each to finish before submitting the next, you can submit as many as you like at the same time (up to a maximum of 3500) or whenever you wish even if you already have jobs either running or queued. Think of the cluster as a corn mill - a giant hopper is filled with tons of grain but a small but steady stream of grain runs out of the bottom onto the millstones, The same with the queuing system; you put a few hundred or even one or two thousand jobs into the queue and walk away, knowing that eventually all of these jobs will be executed. Some users take advantage of this to load up lots of jobs on a Friday afternoon, go away for the weekend and come back on Monday to find all jobs completed; the Christmas vacation is another popular time for pouring jobs into the system - 269,000 jobs were put into the system by one user alone just before Christmas 2013 (although this is now limited to 3500 jobs).
+Fairness of resource usage amongst users is maintained through user resource limits - most users are limited to running (currently) 30 simultaneous jobs at any one time but you can have up to 3500 jobs in the queue waiting to be run. A few users have higher simultaneous job limits by special arrangement but there are no other user-specific limits and all users of the Maths compute cluster are treated equally.
+The simultaneous job limit is kept under review and does vary from time to time - if the cluster is not especially busy and if only about 50% of the available resources are used, this limit is raised to allow more jobs to be run. But if there are a lot of users using it, then the limit is lowered to 20 or even less in the interests of fairness to all users.
+The queue control software used on the compute cluster is a modified version of OpenPBS called Torque, while the scheduler component is Maui. A dedicated server called openpbs.ma controls the queueing system, handles usage accounting and hosts the Torque website which contains a number of web-based utilties you can use with the queuing system as well as more documentation on Torque and Maui.
+Introducing the queues
+
+Thirteen queues with different characteristics are currently available on the queuing system and the vast majority of jobs can be run on the 'standard' queue which is the default if you don't specify a queue when you use the system. We'll look at the three main queues - standard, medium and jumbo - in turn and discuss their differing characteristics and their intended use. Details of the less popular queues then follow.
+From time to time, various additional queues are sometimes created for experimental purposes or for an individual user's use and these will show up if you use the 'qstat -q' command to see the queue status. However, only the 13 queues described below are officially available and fully supported and use of any other queues you may stumble across is not encouraged!
+Note: it is important to realise that some of the queues require significant resources to be available before any jobs queued to them can be run. This is especially true for the 'jumbo' queue described below - the standard queue will always be available as it requires the lowest common denominator of resources but the jumbo queue requires substantially more and jobs queued to this queue will not run until a node becomes free of user jobs running in other queues.
+The standard queue
+
+The standard queue has the following resources:
+number of nodes: 1
+number of CPU cores: 1
+memory available: 1930 MBytes
+CPU time available: unlimited
+wall time available: unlimited
+where:
+a node means a single computer, such as macomp02 or macomp14
+a CPU core means one of the cores in each physical CPU (there are two physical CPUs with 4 cores each in most of the nodes in the cluster so there are a total of 8 cores)
+the minimum amount of memory available in a cluster node is 16 GB which means each core has 2 GB (2048 MB) available but we need to allow for memory used by the operating system and queue management systems so 1930 MB has been found to be a safe allocation per core.
+CPU time is the actual amount of time that the CPU core spends executing your job - the CPU core has a lot of other things to do besides running user's jobs, some of which are time critical and cannot be delayed until later. So the CPU uses time slicing where some of its time is allocated to various other tasks and the rest is available to your job.
+wall time literally means 'real' time as would be displayed by an ordinary clock on the wall! Wall time is always greater than CPU time as no CPU core will be able to devote all of its time (aka processor cycles) to running your job. For example, you might have a job that uses exactly 1 hour (3600 seconds) of CPU time but because the CPU core has to spend, say, 2% of its time writing your data out to a file and doing a few other system tasks, the actual time taken as measured by a chronological timepiece (an ordinary clock) would be 3072 seconds or 1 hour, 1 minute and 12 seconds.
+So in the standard queue, these resources mean that your job can run on one computer only in the cluster using just 1 CPU core and using no more than 2 Gbytes of memory, but there is no limit to how long that job is allowed to run for in terms of hours, days or weeks and there is no limit to the amount of CPU processor core time either. These resource limits are both the default and the maximum - when we gain more experience of the system and get a better idea of how users are using it and the resources required, we will then separate the default and maximum resource settings so that a user can submit a job without a resource specification and have it run using the default resources or alternatively, the user could request more resources up to but not exceeding the maximum limits when submitting the job.
+The medium queue
+
+For larger jobs requiring up to 8 processor cores and a maximum of 8 Gb of memory, the medium queue has the following properties:
+number of nodes: 3
+default number of CPU cores: 1
+maximum number of CPU cores: 8
+default memory available: 4 GBytes
+maximum memory available: 8 GBytes
+CPU time available: unlimited
+wall time available: unlimited
+If you submit a job to the medium queue with no other parameters, it will behave much like the standard queue except your job will have double the memory available (4 Gb instead of 2 Gb) as you will be using the queue's default resources. You can override the default memory and CPU processor resource settings of the medium queue up to the maximum allowable values either on the command line when you submit the job or in your qsub wrapper script - both of these methods will be described later.
+The jumbo queue
+
+To take full advantage of the larger 32 GB of memory installed in the newer macomp09, macomp10 and macomp11 nodes, the jumbo queue provides:
+number of nodes: 3
+default number of CPU cores: 1
+maximum number of CPU cores: 1
+default memory available: 15.8 GBytes
+maximum memory available: 15.8 GBytes
+CPU time available: unlimited
+wall time available: unlimited
+This queue is intended for jobs requiring nearly 16 GB of memory but only one processor core and may be reviewed to include more cores if there is a demand for it.
+The parallel queues - parallel4, paralle6, parallel8, parallel16, parallel32 and parallel64
+
+These six queues were originally intended especially for running Matlab parallel jobs where Matlab makes its own decisions regarding CPU core usage up to a maximum of 64 cores on one node. But they can be used for any parallel processing job, such as Gerris 2D computations, etc. As the queue names imply, they allow up to 4, 6, 8, 16, 32 or 64 processors cores to be assigned to a single job.
+From version 2007a, Matlab introduced for the first time parallel processing features which allow you to tell a Matlab program to use more than one processor core if it is available. Typically, you would include a statement such as:
+matlabpool local 4
+in your Matlab start up file (startup.m) which will tell your program to use 4 cores on the local node. However, this clashes with the resources available to the standard queue which specifies 1 processor core only and running such a job on the standard or medium queues will actually subvert the queuing system as Matlab, being unaware of the standard queue's CPU core limit, will then use additional CPU cores regardless of Torque's per-job limits and regardless of whether the extra cores have already been assigned to other jobs, potentially resulting in a very slow and overloaded node.
+To accommodate these parallelised Matlab jobs, the special parallel queues have been created which fools Torque into thinking that the node it is running on has only one CPU core. This prevents the queuing system from assigning more than one core to the job (and possibly several cores over several different modes, which would be bad news for a parallel Matlab job's performance) and allows Matlab to handle multi-core operations itself.
+The parallel queues are now available on some nodes and as with the medium and jumbo queues described above, these queues will only be ready to run jobs if all the resources it needs - that is, 4, 6, 8, 16, 32 or 64 CPU cores - are available on a node which implies, for example, that a paralle8 queue job will only be assigned to an 8-core node if it is not running any other jobs.
+The large queues - large64, large256 and large512
+
+Intended for running jobs requiring a single processor but a large amount of memory, these queues respectively allow up to 64, 256 and 512GB of memory to be allocated to a compute job. In all other respects these queues are the same as the standard queue.
+The standard_intel and parallel_intel queues
+
+Most of the compute nodes in this cluster have Intel Xeon CPUs but two have AMD Opteron CPUs; although these microprocessors share the same x86_64 microprocessor instruction set, some of the newer Intel Xeon processors have additional instructions that are lacking in the AMD CPUs. Programs compiled for Intel CPUs will sometimes not execute properly on AMD CPUs owing to the missing support for these CPU instructions and this is often most notable with R packages which rely on contributions from a large number of people who are using different hardware platforms. This would result in certain R jobs submitted to the cluster failing if they happened to use libraries containing, for example, Intel-specific code and executing on the AMD-based nodes macomp17 and macomp19.
+For this reason the standard_intel and parallel8_intel queues were added which are identical to the standard and parallel8 queues but will never execute jobs on macomp17 or macomp19.
+Special queues
+
+From time to time special queues are added to the cluster to meet a particular user's requirements or to resolve an issue. These will appear in a 'qstat -q' listing but are not necessarily meant for you to use since without knowledge of how they are configured, the result of using unknown queues will be unpredictable.
+Before you start using it...
+
+Setting up SSH to connect without a password
+
+One thing you need to do when you first log into macomp001 - if you haven't already done so - is to set up a SSH private:public key pair so that the queueing system can automatically copy your jobs from one node to another without having to prompt you for a password every time. This is because the queueing system makes decisions on which is the best node on which to run your job - which will not be the macomp001 submission node you are currently logged into - and it uses scp (SecureCoPy) to transfer jobs to another node.
+Creating a SSH key pair is easy using the ssh-keygen utility - there are quite a lot of options to this but by default it will create keys suitable for most users (a 2048 bit RSA key pair for use with ssh protocol 2 connections). But do note that you must create a keypair with no passphrase; if you specify a passphrase, it defeats the whole object of the private/public keypair scheme as you'll then be prompted for the passphrase instead of the password! So in the example ssh-keygen session shown below, simply hit return both times you are prompted for a passphrase and it will create a keypair that does not use or require a passphrase:
+andy@macomp001:~ $ ssh-keygen 
+Generating public/private rsa key pair.
+Enter file in which to save the key (/home/ma/a/andy/.ssh/id_rsa): 
+Enter passphrase (empty for no passphrase): 
+Enter same passphrase again: 
+Your identification has been saved in /home/ma/a/andy/.ssh/id_rsa.
+Your public key has been saved in /home/ma/a/andy/.ssh/id_rsa.pub.
+The key fingerprint is:
+80:d9:2c:2d:d7:4e:57:7f:a1:68:6a:d1:79:02:bc:18 andy@macomp001.ma.ic.ac.uk
+This will create two keys in your .ssh folder:
+andy@macomp001:~ $ ls -l .ssh
+total 64
+-rw------- 1 andy mastaff   883 Nov 10 14:50 id_rsa
+-rw-r--r-- 1 andy mastaff   222 Nov 10 14:50 id_rsa.pub
+The id_rsa key is your private key which you should look after and never give to anyone else; note that its permissions are such that only yourself can read it or change it and if you relax these permissions in any way, the key becomes insecure. Most ssh clients (including the one on the compute cluster nodes) will warn or even prevent you from using the key until the permissions have been set correctly. On the other hand your public key is id_rsa.pub which can be read by anyone - this is intentional otherwise the remote system will not be able to use your public key.
+When using ssh private/public keys to connect to other systems, the private key, id_rsa, needs to be in your ~/.ssh folder on the computer you are making the ssh connection from while the id_rsa.pub public key must be in a file called authorized_keys in your ~/.ssh folder on the computer you want to connect to. But you won't actually have to worry about copying public keys to other nodes on this cluster because all of the nodes share exactly the same home directory containing your .ssh folder and its keys. All you need to do now that you have created your key pair is copy your id_rsa.pub public key to a file called authorized keys:
+andy@macomp001:~ $ cd .ssh
+andy@macomp001:~/.ssh $ cp id_rsa.pub authorized_keys
+You'll need to make at least one connection to each of the compute nodes in the cluster before using the job queueing system otherwise you may receive reports that jobs cannot be transferred to another node before execution or that the queueing system cannot copy the output and/or error files to your home directory when your job has completed. A script called update-ssh-known-hosts has been provided which will automatically log you into every node and store that node's public host key in your ~/.ssh/known_hosts file. From a terminal (shell) prompt just type:
+update-ssh-known-hosts
+and wait for the script to complete. Now you are ready to start using the cluster.
+
+How do I submit a job to the cluster?
+
+Jobs are submitted by first writing a small 'wrapper' shell script known as the 'submission script' and then using the qsub command to submit it. This script contains:
+queueing system control directives - these always start with the characters #PBS at the beginning of the line and tell the queueing system to do certain things
+standard shell commands to change directories, run your own shell scripts or run programs
+comments which are preceded by the usual hash (pound) characters used to denote a comment line in a shell script; qsub will ignore these comments
+Here is a sample submission script called 'queue.test4' although you can choose any name you like for your submission scripts:
+andy@macomp001:~/pbs_tests $ cat queue.test4
+#!/bin/bash
+#PBS -N R_job
+#PBS -m be
+#PBS -q standard
+
+cd ${HOME}/pbs_tests
+/usr/bin/R --vanilla < test.r > test_r.out
+This qsub wrapper starts with the usual shell interpreter definition in the first line (/bin/bash, /bin/csh or /bin/tcsh according to your preference - most users prefer the bash shell which is the default on Maths systems)
+The next line contains the optional qsub 'N' option which allows you to give your job a meaningful name
+#PBS -N R_job
+On line 3, the cryptic directive
+#PBS -m be
+enables a very useful feature of the queueing system - it tells the system to send you an email when the job execution is started (that's what the 'b' for 'begin' stands for) and another email when it ends (which is what the 'e' is for). A third optional parameter for the -m mail option is 'a', which means an email is sent to you if the job is aborted.
+Finally on line 4,
+#PBS -q standard
+tells the queueing system to run your job on the standard queue.
+Commands for running your job itself then follow the qsub PBS directives; in this example, we first change to the user's working directory which in this example is the subdirectory in the home directory called 'pbs_tests' with cd $HOME/pbs_tests - it is a good idea to explicitly specify this in a qsub script as the queueing system runs jobs on your behalf as root and itself has no knowledge of your home directory nor does it know about which directory you invoked the qsub submission from or about paths relative to your home directory, for example.
+Finally, the program execution command along with all of its arguments comes at the end of the script, in this case to run an R program that takes its input from the script 'test.r' and stores the output in the file 'r.out'. Once you have written your wrapper script, you can run it with qsub like this:
+qsub queue.test4
+Checking on your jobs
+
+You can check on the status of your jobs on the cluster in two ways - using the Torque and Maui commands or by using the web interface on the cluster controller.
+Using Torque and Maui commands
+
+You can check on the status of your jobs in the queue with the rather basic 'qstat' command:
+andy@macomp001:~/pbs_tests $ qstat
+Job id                    Name             User            Time Use S Queue
+------------------------- ---------------- --------------- -------- - -----
+1.macomp001.mathscluster  time-waster_job  andy            0        Q standard          
+2.macomp001.mathscluster  examplejob       andy            0        Q standard          
+3.macomp001.mathscluster  recursive-ls     andy            0        Q standard
+This example shows 3 jobs queued to the standard queue from the node called macomp001 - note the column headed with 'S' (the status column) is showing all jobs as 'Q', meaning it is queued but not yet running.
+Another important item in qstat's output is the Job ID - this shows the job as a number followed by a period and the node it has been submitted from. You will often need to know the Job ID when working with the queue system as it identifies your job(s); if you are working on just one node or if you only have one job with a given Job ID number, then you can omit the node identifier and simply refer to the job by number.
+qstat will only produce output if jobs are waiting in the queue or are running and there is no output if the jobs have already terminated or if your submission to the queue was unsuccessful for some reason. When a job you have submitting is actually running, the status column in the qstat display changes to 'R' meaning the job is currently executing.
+andy@macomp001:~/pbs_tests $ qstat
+Job id                    Name             User            Time Use S Queue
+------------------------- ---------------- --------------- -------- - -----
+52.openpbs.mathscluster   R_job            andy            0        R standard
+After a job has run for a while, the 'Time Use' column is updated:
+andy@macomp001:~/pbs_tests $ qstat
+Job id                    Name             User            Time Use S Queue
+------------------------- ---------------- --------------- -------- - -----
+52.openpbs.mathscluster   R_job            andy            00:00:23 R standard
+Invoking qstat with the '-f' option gives you a comprehensive report on the job along with some information about the standard queue and its default/maximum resource allocations:
+andy@macomp001:~/pbs_tests $ qstat -f
+Job Id: 51.ma-queue
+    Job_Name = R_job
+    Job_Owner = andy@macomp001
+    job_state = R
+    queue = standard
+    server = ma-queue
+    Checkpoint = u
+    ctime = Fri Feb 12 12:01:35 2010
+    Error_Path = macomp001.mathscluster.ma.ic.ac.uk:/home/ma/a/andy/pbs_tests/R_job.e51
+    exec_host = macomp04/0
+    Hold_Types = n
+    Join_Path = n
+    Keep_Files = n
+    Mail_Points = be
+    mtime = Fri Feb 12 12:01:36 2010
+    Output_Path = macomp001.mathscluster.ma.ic.ac.uk:/home/ma/a/andy/pbs_tests/R_job.o51
+    Priority = 0
+    qtime = Fri Feb 12 12:01:35 2010
+    Rerunable = True
+    Resource_List.mem = 2000mb
+    Resource_List.ncpus = 1
+    Resource_List.nodect = 1
+    Resource_List.nodes = 1
+    session_id = 1531
+    Variable_List = PBS_O_HOME=/home/ma/a/andy,PBS_O_LANG=en_GB.UTF-8,
+   	    PBS_O_LOGNAME=andy,
+   	    PBS_O_PATH=/usr/local_machine/bin:/usr/kerberos/bin:/usr/local/bin:/bin:/usr/bin:/usr/local_machine/bin:/usr/local_machine/sbin:/usr/local/
+   	    apache/bin:/usr/local/mysql/bin,PBS_O_MAIL=/var/spool/mail/andy,
+   	    PBS_O_SHELL=/bin/bash,PBS_O_HOST=macomp001.mathscluster.ma.ic.ac.uk
+   	    PBS_SERVER=openpbs.mathscluster.ma.ic.ac.uk
+   	    PBS_O_WORKDIR=/home/ma/a/andy/pbs_tests,PBS_O_QUEUE=standard
+    etime = Fri Feb 12 12:01:35 2010
+    submit_args = queue.test4
+    start_time = Fri Feb 12 12:01:36 2010
+    start_count = 1
+    fault_tolerant = False
+An alternative to the qstat command is showq, which is one of the Maui scheduler commands:
+andy@macomp001:~/pbs_tests $ showq
+ACTIVE JOBS--------------------
+JOBNAME            USERNAME      STATE  PROC   REMAINING            STARTTIME
+
+52                     andy    Running     1    00:00:00  Fri Feb 12 12:24:55
+
+   1 Active Job        1 of   40 Processors Active (2.50%)
+                       1 of    5 Nodes Active      (20.00%)
+
+IDLE JOBS----------------------
+JOBNAME            USERNAME      STATE  PROC     WCLIMIT            QUEUETIME
+
+
+0 Idle Jobs
+
+BLOCKED JOBS----------------
+JOBNAME            USERNAME      STATE  PROC     WCLIMIT            QUEUETIME
+
+
+Total Jobs: 1   Active Jobs: 1   Idle Jobs: 0   Blocked Jobs: 0
+This display shows a global view of all 5 nodes shown in this small 5-node example compute cluster as well as the 40 processor cores available and Job ID 52 is using one processor on one node.
+Both Torque and Maui provide a wealth of additional commands for querying, monitoring and analysing your jobs in the queue and a complete listing of these commands can be found here.
+Using the openpbs queue controller web interface
+
+Alternatively you can use the web interface on the cluster management controller to check on the status of the cluster as a whole, report on all the currently running jobs and generate both simple and detailed reports on specific job IDs. This should be self explanatory but please note that for security reasons, this facility is only accessible from systems that are on the college network or using the college's VPN services.
+Controlling your jobs
+
+Sometimes you might decide a job you have submitted to the cluster is not wanted after all or is unlikely to run properly owing to a coding error, etc. You can delete jobs that are queued and waiting to be run as well as jobs that are actually running as follows:
+Deleting a job from the queue
+
+You can remove a queued job from the queue if it has not yet been started with the qdel command, giving the Job ID as the argument:
+andy@macomp001:~/pbs_tests $ qdel 52
+This command executes silently with no confirmation or feedback unless you enter a non-existent Job ID. It goes without saying you can only delete your own jobs, not those of other users!
+Cancelling a job
+
+If you need to cancel a running job, you can do this with the canceljob utility, giving the Job ID as the argument:
+andy@macomp001:~/pbs_tests $ canceljob 52
+
+job '52' cancelled
+
+How do I know when my job has started, completed or even been aborted?
+
+If you have used the PBS -m option to tell the system that you want to be notified of start, abort and end events, you will receive emails from the system. If you have specified PBS -m be (with the begin and end parameters), you will receive an email like the following when the job starts:
+Date: Fri, 12 Feb 2010 12:00:57 +0000
+From: "root@openpbs.ma.ic.ac.uk" 
+To: "Thomas, Andy D" 
+Subject: PBS JOB 50.openpbs
+
+PBS Job Id: 50.ma-queue
+Job Name:   R_job
+Exec host:  macomp04.mathscluster.ma.ic.ac.uk/0
+Begun execution
+and when the job completes, another email is sent which contains some information about the resources used, which nodes(s) were utilised, the CPU time used and the wall time for the whole job, etc:
+Date: Fri, 12 Feb 2010 12:01:08 +0000
+From: "root@openpbs.ma.ic.ac.uk" 
+To: "Thomas, Andy D" 
+Subject: PBS JOB 50.ma-queue
+
+PBS Job Id: 50.openpbs
+Job Name:   R_job
+Exec host:  macomp04.mathscluster.ma.ic.ac.uk/0
+Execution terminated
+Exit_status=0
+resources_used.cput=00:00:09
+resources_used.mem=0kb
+resources_used.vmem=0kb
+resources_used.walltime=00:00:10
+From this you can see that this very short job used 9 seconds of CPU time and, as expected, the 'wall time' was slightly longer.
+The observant reader will note from these emails that although the job was submitted on macomp001, it was actually executed on the macomp04 node. Notifications from the queuing system will always come from openpbs as this node is the queue management node on which the Torque/Maui queue server/scheduler pair are hosted; the other nodes in the cluster simply run the queue clients that communicate with the queue server & scheduler on openpbs.
+Where is my output?
+
+Even if you have specified a file in which to write the output (ie, the standard out) of your job into as part of your submission script, the queueing system will always create extra two files in the subdirectory from which you submitted the job from. One is the 'o' (output) file, containing the error output from your job (the standard error, if any) and the other file, the 'e' (error) file, contains any error messages from the queue system itself. These two files will always be created for every job you run - if there are no errors from either your job or from the queueing system, these files will be zero length but they will still exist nontheless which you could use as an indicator (eg, for a monitoring script) that the job has completed.
+The files will take the form: <Job Name>.o<Job ID> and <Job Name>.e<Job ID> respectively.
+So if your job is called matlab with the full Job ID 54.openpbs, then remembering that the hostname part of the Job ID will be quietly dropped, when it completes you will find the file:
+matlab.o54
+in the directory you submitted the job from initially and it might contain the warning message:
+Warning: No display specified.  You will not be able to display graphics on the screen.
+
+                            < M A T L A B (R) >
+                  Copyright 1984-2009 The MathWorks, Inc.
+                Version 7.8.0.347 (R2009a) 64-bit (glnxa64)
+                             February 12, 2009
+
+ 
+  		To get started, type one of these: helpwin, helpdesk, or demo.
+  		For product information, visit www.mathworks.com.
+An example of an 'e' file would be R_job.e29 produced by an incorrectly specified invocation of R called, fittingly enough, 'R_job' with the Job ID of 29:
+Fatal error: you must specify '--save', '--no-save' or '--vanilla'
+So to recap: 'e' files are produced by the Torque/Maui queueing system if it has a problem with running your job, as in the example above which has a missing '--vanilla' option to the R invocation - the job can't be started by the queueing system and the error message is written to the file 'R_job.e29'. But once Torque has got your job started, then your job might encounter its own errors which will be written to the 'o' file as in the 'matlab.o54' example (above), where the '-nodisplay' option was missing when Matlab was not being started from an X terminal.
+What if my job goes wrong?
+
+Unfortunately, quite a few things can go wrong so this section summarises some of the things that we have found out through trial & error as we gain more experience of the system.
+I have submitted a job to qsub but nothing seems to happen
+
+Sometimes a job will execute so quickly once you have submitted it using qsub that it completes before you have a chance to check on its status. If you have used the #PBS -m be option as suggested above, you will receive two emails in rapid succession. One solution is to log into the openpbs server using the same password you use for the macomp001 submission node and use the Torque 'tracejob' command to backtrack through the various logs the system keeps of all user's jobs and present everything it knows about a given job:
+andy@openpbs:~ $ tracejob -qalm 65
+/var/spool/torque/server_priv/accounting/20100223: Permission denied
+/var/spool/torque/mom_logs/20100223: No matching job records located
+/var/spool/torque/sched_logs/20100223: No such file or directory
+
+Job: 65.openpbs
+
+02/23/2010 11:32:15  S    enqueuing into standard, state 1 hop 1
+02/23/2010 11:32:15  S    Job Queued at request of
+                          andy@macomp05.ma.ic.ac.uk, owner =
+                          andy@macomp05.ma.ic.ac.uk, job name = matlab,
+                          queue = standard
+02/23/2010 11:32:16  S    Job Modified at request of root@openpbs
+02/23/2010 11:32:16  S    Job Run at request of root@openpbs
+02/23/2010 11:32:16  S    Job Modified at request of root@openpbs
+02/23/2010 11:32:16  S    Exit_status=127 resources_used.cput=00:00:00
+                          resources_used.mem=1480kb resources_used.vmem=97428kb
+                          resources_used.walltime=00:00:00
+02/23/2010 11:32:25  S    Post job file processing error
+02/23/2010 11:32:25  S    dequeuing from standard, state COMPLETE
+The '-qalm' option tells tracejob to suppress all error messages and not to try looking into non-existent logs for information about a job. You need to run tracejob on openpbs since this is the queue management node on which the Torque/PBS server is hosted and the queueing system logs are kept on this system only.
+By default tracejob will present information about your job if it was started today (ie, after 00:01 this morning) as the Torque server logs roll-over to a fresh log at midnight; if you want to look at previous jobs, use the '-n' option to specify how many days in the past you want to query, eg:
+andy@openpbs:~ $ tracejob -n 4 37
+will provide information on job ID 37 that you submitted to the queueing system any time within the past 4 days. If a job completes one or more days after the day it is started, the system will retrieve the logs from both the start day and the completion day and display the entire queued session even if it spans many days. tracejob defaults to '-n 1' if this option is not given so the smallest useful parameter is 2.
+Exit status
+
+Like almost all Linux tasks, every job executed by the Torque/Maui queueing system returns an exit status, a integer that indicates the whether the job was successful or not - an exit status of 0 (zero) always means the task completed successfully and any other number indicates an error condition (which might not necessarily have been fatal). But to distinguish an exit status set by the queueing system itself from one set by the job you are running, all exit status values returned by the Torque queue server will have a negative value while those returned by your program or job will have a positive value as usual.
+If you have used a wrapper script containing a #PBS -m e directive to mail you when the job has completed, the mail message will contain the exit status as in this example:
+
+Subject: PBS JOB 69.openpbs
+
+PBS Job Id: 69.openpbs
+Job Name:   triplej.sh
+Exec host:  macomp04.mathscluster.ma.ic.ac.uk/1
+Execution terminated
+Exit_status=134
+resources_used.cput=00:00:00
+resources_used.mem=0kb
+resources_used.vmem=0kb
+resources_used.walltime=00:00:00
+where you can see that the exit status is 134. As this is a positive integer, this is the exit status of your job and you will need to consult the documentation of your job's package (or your own code if you wrote it yourself) to find out what it means.
+Alternatively, you can use the tracejob utility on the openpbs server to find out the exit status of a particular job as in the example above, where the exit_status is 127.
+What are the scratch disks for?
+
+Sometimes you might want to work with large files or programs that won't fit into your default ICNFS home directory as there is not enough free space left in it or maybe the job you want to run produces huge amounts of output. This is where the scratch disks come to the rescue; most nodes have an additional scratch disk fitted - 1000 GB (but not on macomp17, macomp18 or macomp19).
+You can create your own folders and files on any of the scratch disks whenever you want to and all of the scratch disks are interconnected between the server nodes on the cluster over the internal network so that you can access any node's scratch disk from any other node, as well as from itself. On each node, the scratch disks are named as follows:
+for the macomp01-16 and macomp20-29 nodes, they are called /scratchcompXX where XX is the last two digits of the node's name; for example, macomp01's scratch disk is accessible cluster-wide as /scratchcomp01, macomp02's scratch disk can be accessed as /scratchcomp02, and so on
+For more information on making the most of the scratch disks, how to keep your scratch files & folders secure and more, visit the scratch disk page. Please note that the scratch disks are not backed up in any way so it is up to you to ensure you have a copy of any important data you may have left on the scratch disks. Scratch disks were introduced in the early days of the Maths compute cluster when all the storage we had was that provided by the ICNFS service. Now that we have our own much larger fully backed-up storage facilities the scratch disks are probably less important than they used to be but they are still very popular.
+Is there any additional storage?
+
+Yes! If you need more storage for your files, programs, experimental data, etc you can use the calculus storage server where just like the scratch disks you can create you own space, one or more of the large data silos in Maths or have your cluster default home directory changed to either the clustor server or the new clustor2 server which is an integral part of the NextGen cluster. All of these are mounted on the NextGen cluster, making it easy for you to transfer data between your ICNFS home directory, any scratch disks you have used or space you have created on calculus and your accounts on the data silos, clustor or clustor2 storage servers.
+More information
+
+This documentation is permanently very much a work in progress although the queueing system itself has now matured with well over 1.5 million jobs having been run on the legacy cluster since its launch in 2010 and more nodes and queues have since been added. The Torque/Maui queue management system is very complex with a rich set of programs and utilities, many of which only come into play on very large cluster farms.
+Extensive man documentation is installed on macomp001 for the following Torque programs and utilities;
+
+	chk_tree    printjob                pbsdsh      qhold   qselect
+	hostn       printserverdb           pbsnodes    qmove   qsig
+	nc-config   printtracking           qalter      qmsg    qstart
+	ncdump      pbs_queue_attributes    qchkpt      qorder  qstat
+	ncgen       pbs_resources           qdel        qrerun  qstop
+	nqs2pbs     pbs_server              qdisable    qrls    qsub       
+	pbs-config  pbs_track               qenable     qrun    tracejob
+while the Maui scheduler has a few commands intended for end user use.
+
+canceljob    checkjob     showbf     showq   showstart  showstats
+You will find comprehensive information online at the Adaptive Computing site.
+
+
+Andy Thomas
+Research Computing Manager,
+Department of Mathematics
+last updated: 11.3.2025
+
+
+
+
+
+
+
+
+Clustor2: high performance alternative home directories for cluster users
+
+Bigger and faster storage for the compute cluster
+
+The old computing adage "you can never have too much storage" certainly holds good in Maths; at its introduction in the summer of 2015, clustor was primarily intended to provide a lot of storage for compute cluster use far into the future but at about that time a number of newcomers in the dept were proposing and then starting work on fresh research projects with large datasets. There was nowhere else to store this except on clustor so it wasn't long before the cluster's storage needs were overtaken by these new projects and clustor became rather full.
+Based on clustor, clustor2 was introduced at the beginning of 2018 after the NextGen cluster was launched the previous summer and was designed from the outset to be an integral part of it. Using a separate internal network to link it to the cluster nodes instead of the busy college network, it also had twice the physical usable storage capacity at 60 TB and embodying storage enhancements developed since clustor was built, the new server had an actual storage capacity of around 90 TB and is a lot faster in operation than clustor. Towards the end of 2024, clustor2 was further upgraded, boosting the available storage capacity to well over 100TB.
+Where are the new clustor2 home directories?
+
+clustor2 home directories are in /home/clustor2/ma/u/username with the existing clustor home directories alongside in /home/clustor/ma/u/username, where the subdirectory 'u' is an alphabetic letter from a to z corresponding to the first letter of the usernames contained within it. Users' logical home directories are in /home/ma/u/username as before with the physical ICNFS home directories at /home/icnfs/ma/u/username
+So if your username is im304, then:
+your logical home directory is: /home/ma/i/im304
+your ICNFS home directory is: /home/icnfs/ma/i/im304
+your clustor home directory is: /home/clustor/ma/i/im304
+your clustor2 home directory is: /home/clustor2/ma/i/im304
+In all other respects, the way clustor2 is organised and used is identical to clustor and the clustor documentation largely applies to clustor2.
+To sum all this up: your logical home directory remains as it was before - for example, /home/ma/i/im304 - but it is linked to one of three physical home directories, either to your existing ICNFS home directory, your clustor home directory or your new clustor2 home directory.
+I want to switch my default home directory on the cluster to clustor2 - what do I do?
+
+Simply email Andy Thomas and ask for this to be done.
+Important: once this has been done, do remember to copy your ~/.ssh folder and its contents from your ICNFS home directory to your clustor2 home directory otherwise you will have to re-create this folder, re-create your SSH keypair and run the update-ssh-known-hosts file again as described here before you can run jobs on the cluster again.
+How long will I have to wait for this to be done?
+
+Good question! It depends on what you are doing on the cluster at the time - the changes need to be made on each node on the cluster and for obvious reasons, it is not a good idea to do this when you have one or more jobs running on the cluster nor when you are logged into the cluster. So if you're not using the cluster and are not logged into any of the nodes (including the test & development node macomp000 and the submission node macomp001), the changes will be made within a few minutes of receiving your email during normal working hours and within a few hours at other times. And if you have any jobs running, you will have to wait until these have completed before switching your home directory.
+Once a request for switching home home directories is received, automated checks will be made to ensure these conditions are met (no jobs running, no logins to the nodes) before doing this so there is no need for you to delay making the request just because you have some jobs running, for example. After the switchover has been done, you will receive an email to confirm the changes have been made.
+How can I check whether my physical home directory is on ICNFS, on clustor or on clustor2?
+
+From any node simply typing the command:
+ls -l $HOME | cut -d ' ' -f11
+will show you your physical home directory. For example, if your cluster home directory storage is using your ICNFS home directory, this command will respond with:
+/home/icnfs/ma/i/im304
+while a logical home directory physically on clustor2 will appear as:
+/home/clustor2/ma/i/im304
+Is my clustor2 home directory backed up?
+
+Yes, but not in the same way as ICNFS. One nice feature of the central ICNFS service is it is backed up to tape nightly with incremental backups going back 4 months, so you can ask for a specific file or folder to be restored from any date over that period. With clustor2, it is impractical to offer the same kind of service because the amount of data is potentially vastly greater and we do not have the huge tape library systems that the central backup service has.
+However, clustor2 is mirrored to another identical backup server early each morning, but not continously, so there is deliberate hysteresis built into the system. This ensures we have a full backup in case of total failure of clustor2; the delay means that if you delete or over-write a file early in the morning and then realise the error later the same day, the file(s) or folder(s) can be replaced from the mirror as long as this is requested before 07:00am the next day.
+If there is demand, we may be able to offer daily tape backups in the future for some users in the same way as we already do for individual users and some research servers but this will not be a standard feature of clustor2 home directories.
+Why is my clustor2 home directory empty?
+
+It is up to you to put data into your clustor2 home directory - we are not replicating your ICNFS home directory to your clustor2 home directory for you. In fact, we can't do this as we have no access to your ICNFS data - only ICT can do this. You can use all the standard Linux methods on macomp001 to do this - cp, tar, rsync, etc - as well as copy data from your ICNFS home directory into your clustor2 home directory directly.
+What is my disk quota on the clustor2 home directory?
+
+There isn't one. We need to get away from old-fashioned restrictive disk quotas that hamper research and Maths' policy of not formally imposing usage quotas of any kind has worked well on the other storage servers for years. Obviously disk usage will be monitored and anyone using more than 2-3 terabytes will be encouraged to store data less essential to ongoing computational work on the other storage servers such as silo1 and silo2. So please store your holiday snaps, videos, MP3s, etc somewhere else.
+About clustor2
+
+clustor2.ma is a Dell PowerEdge R740xd server with dual 12-core Intel Xeon CPUs and contains 14 disks. Two mirrored system disks are fitted and originally, another 9 x 8 TB disks plus a 'hot spare' made up a ZFS RAIDz1 pool (equivalent to hardware RAID 5 without its drawbacks, such as the infamous 'write hole') of 72 TB raw capacity. In addition, a 256 GB SSD was used for the ZFS intent log and a second SSD used as the read cache - these features account for the fast performance of this server compared with clustor. Data compression using the lz4 algorithm is used to increase the 'real' storage of this server by roughly 40% to around 90TB depending on the nature of the data being stored.
+Towards the end of 2024, the server was further upgraded replacing the two SSDs with much faster nvme devices, with a RAID1 mirrored pair of nvmes replacing the single SSD ZFS intent log and a third nvme replacing the read cache device and at the same time, two additional 8TB disks were added, increasing the overall capacity. The server runs FreeBSD 14.1 - the backup mirror server, clustor2-backup.ma, is identical and has a separate dedicated point-to-point 10Gbit/s fibre network link used solely for inter-server mirroring.
+Any questions?
+
+As always, I'll be happy to answer any questions you may have.
+
+
+Andy Thomas
+
+ Research Computing Manager,
+Department of Mathematics
+last updated: 08.08.2025
+
+
+
+Clustor: alternative home directories for cluster users
+
+Why we have introduced alternative home directories
+
+Ever since it was first introduced, the Maths compute cluster has by default used college Linux home directories hosted on the central ICNFS service for user data storage. But this has had its problems; the space available is very limited by today's standards, disk usage quotas are enforced which frequently cause problems for research users, there are sometimes incidents on ICNFS with the storage going off-line and becoming disconnected from Maths systems for extended periods, unexplained read-only filesystem states or input/output errors and, sometimes, user jobs running on the cluster actually cause problems for the ICNFS service owing to high data transfer rates into or out of user home directories.
+To get around the storage capacity problem, local scratch disks, the calculus server and large data storage servers (the silos) with no usage quotas were introduced several years ago. But the scratch disks, although fast, are not intended for long-term data storage (although some users who like to live dangerously do use them for this!) and the silo servers are not intended for high speed real-time data storage from running jobs (again, some cluster users do use the silos in this way). And because none of these alternative storage schemes are in the same place as the user's default home directory, users must remember to clearly state the storage locations they want to use when submitting jobs to the Torque/Maui job management system.
+Clearly, a better version of ICNFS would be the answer to these problems and we are now introducing alternative home directories for cluster users hosted on the new clustor.ma server. Clustor provides nearly 30 terabytes of storage to start with (nearly forty times the existing 770 GB capacity of ICNFS) with fast read/write performance over the network and with no per-user usage limits imposed. Increasing the storage capacity in the future is easy to achieve and backups are provided by a second identical server mirroring the clustor server.
+How does the new scheme work?
+
+When you log into the Maths cluster, your ICNFS home directory is at /home/ma/u/username where 'u' is the first letter of your username and 'username' is your own college username (sometimes also called 'login name'). So if your username happens to be im304, your home directory is /home/ma/i/im304 and this is the directory you will find yourself in immediately after logging in. If you are unsure where your home directory is, the command:
+echo $HOME
+on any Linux or UNIX-like system will tell you what it is; up until now this home directory has always been hosted on the ICNFS service.
+
+With the new alternative home directory scheme, your home directory is logically still in the same place as before - for example, /home/ma/i/im304 - but you now have a choice of whether the physical backing storage providing this is ICNFS or the new Maths clustor home directory server. To begin with, under the new scheme, everyone's cluster storage is still on ICNFS but you can ask for your default home directory to be switched to clustor instead. Also, if you decide to stay with ICNFS as your default home directory on the cluster, you can still access your alternative clustor home directory at its parallel location and vice-versa - users who switch to clustor storage can still access their ICNFS home directory as well. You can copy or move files, directories/folders between your ICNFS and Clustor home directories whenever you wish.
+Clustor should be regarded an optional (but bigger and faster) parallel home directory for Maths compute cluster use - it does not replace your existing ICNFS storage which is still available to you. You will still need to use ICNFS if you want to access your Linux data from Windows or if you have personal web pages hosted on the http://wwwf.imperial.ac.uk webserver farm.
+To sum all this up: your logical home directory remains as it was before - for example, /home/ma/i/im304 - but it is linked to one of two physical home directories, either to your existing ICNFS home directory or your new clustor home directory.
+Where are the new home directories?
+
+As explained above, logical home directories are in /home/ma/u/username as before but the physical ICNFS home directories are now at /home/icnfs/ma/u/username and the new clustor-hosted home directories are in /home/clustor/ma/u/username.
+So if your username is im304, then:
+your logical home directory is: /home/ma/i/im304
+your ICNFS home directory is: /home/icnfs/ma/i/im304
+your clustor home directory is: /home/clustor/ma/i/im304
+I want to switch my default home directory to clustor - what do I do?
+
+Simply email Andy Thomas and ask for this to be done.
+How long will I have to wait for this to be done?
+
+Good question! It depends on what you are doing on the cluster at the time - the changes need to be made on each node on the cluster and for obvious reasons, it is not a good idea to do this when you have one or more jobs running on the cluster nor when you are logged into one or more nodes. So if you're not using the cluster and are not logged into macomp001, the changes will be made within a few hours. But if are logged into a cluster node, you'll have to log out before the switchover is done otherwise you may lose data and your personal settings for some applications, such as R and Matlab, etc. And if you have any jobs running, you will have to wait until these have completed before switching your home directory.
+Once a request for switching home home directories is received, automated checks will be made to ensure these conditions are met (no jobs running, no logins to the nodes) before doing this so there is no need for you to delay making the request just because you have some jobs running, for example. After the switchover has been done, you will receive an email to confirm the changes have been made.
+How can I check whether my physical home directory is on ICNFS or clustor?
+
+From any node simply typing the command:
+ls -l $HOME | cut -d ' ' -f11
+will show you your physical home directory. For example, if your cluster home directory storage is using your ICNFS home directory, this command will respond with:
+/home/icnfs/ma/i/im304
+while a logical home directory physically on clustor will show as:
+/home/clustor/ma/i/im304
+Is my clustor home directory backed up?
+
+Yes, but not in the same way as ICNFS. One nice feature of the central ICNFS service is it is backed up to tape nightly with incremental backups going back 4 months, so you can ask for a specific file or folder to be restored from any date over that period. With clustor, it is impractical to offer the same kind of service because the amount of data is potentially vastly greater and we do not have the huge tape library systems that the central backup service has.
+However, clustor is mirrored to another identical backup server early each morning, but not continously, so there is deliberate hysteresis built into the system. This ensures we have a full backup in case of total failure of clustor; the delay means that if you delete or over-write a file early in the morning and then realise the error later the same day, the file(s) or folder(s) can be replaced from the mirror as long as this is requested before 07:00am the next day.
+If there is demand, we may be able to offer daily tape backups in the future for some users in the same way as we already do for individual users and some research servers but this will not be a standard feature of clustor home directories.
+Why is my clustor home directory empty?
+
+It is up to you to put data into your clustor home directory - we are not replicating your ICNFS home directory to your clustor home directory for you. In fact, we can't do this as we have no access to your ICNFS data - only ICT can do this. You can use all the standard Linux methods - cp, tar, rsync, etc - on macomp001 to do this as well as copy data from your ICNFS home directory into your clustor home directory directly.
+What is my disk quota on the clustor home directory?
+
+There isn't one. We need to get away from old-fashioned restrictive disk quotas that hamper research and Maths' policy of not formally imposing usage quotas of any kind has worked well on the other storage servers for years. Obviously disk usage will be monitored and anyone using more than 2-3 terabytes will be encouraged to store data less essential to ongoing computational work on the other storage servers such as silo1 and silo2. So please store your holiday snaps, videos, MP3s, etc somewhere else.
+About clustor
+
+clustor.ma is a Dell PowerEdge R515 server with dual 12-core AMD Opteron CPUs and contains up to 14 disks. Currently two mirrored system disks are fitted and another 9 x 4 TB disks plus an additional 'hot spare' disk make up a ZFS RAIDz1 pool (equivalent to hardware RAID 5 without its drawbacks, such as the infamous 'write hole') of 28 TB raw capacity. The server runs FreeBSD 10.1 - the backup mirror server, clustor-backup.ma, is identical and has a separate dedicated point-to-point network link used solely for inter-server mirroring.
+Update: from the outset clustor2, introduced at the beginning of 2018, uses a much improved disk pooling scheme with much faster read/write performance than the one in use on clustor so at some stage in the future, these enhancements will be added to clustor and clustor-backup as well.
+Any questions?
+
+As always, I'll be happy to answer any questions you may have.
+
+
+Andy Thomas
+
+ Research Computing Manager,
+Department of Mathematics
+last updated: 09.06.2018
+
+
+
+
+
+Using the scratch disks
+
+About the scratch disks
+
+Each of the 29 compute nodes in the NextGen cluster has a 1 terabyte 'scratch disk' attached which anyone can use to store data, temporary files, etc with no usage quotas imposed. The scratch disk on each compute node is mounted at
+/scratchcompXX
+where XX is the last two digits of the compute node's name. So /scratchcomp01 is the scratch disk for macomp01, scratchcomp02 is the corresponding disk for macomp01 and so on. All of the scratch disks are cross-mounted over the cluster's internal network so that they are accessible from all nodes and the user submission node, macomp001. This means you can access all 29 scratch disks from macomp001 and also, your jobs running on the cluster can access any scratch disk regardless of which node it is physically attached to.
+There are no limits imposed on the amount of data you can store on a scratch disk - other than the space remaining available on that disk, that is - and you can leave your data there as long as you wish. Eventually, after users leave the department or stop using the NextGen cluster, data is deleted after 5 years (10 years in the case of EPSRC-funded work).
+Unlike other data storage facilities on the cluster, these disks are not backed up in any way so if the data you intend storing on a scratch disk is irreplaceble, do remember to keep a copy elsewhere. Having said this, scratch disk failures are rare and average about one per year.
+Making space for the first time
+
+Although you could simply copy one or more files to a scratch disk with the Linux cp command, it's better to first create your own folder into which you can copy these - it's neater, it keeps all your files and sub-folders in one place and makes it easier to move them elsewhere or to make a tar or zip archive of your folder using just one command. Also, it's recommended you name the folder with your own username since this makes it easier to see whose it is at a glance; if you want to create multiple folders in the top level of a scratch disk, your username followed by some suffix of your own choosing might be a good idea. The command:
+mkdir /scratchcomp07/jbloggs
+will create a folder called jbloggs on the scratchcomp07 scratch disk owned by yourself. It's as simple as that.
+
+Security & privacy
+
+When you create space for yourself on a scratch disk you probably won't want to share this with other users. Restricting access to your folders and files on scratch disks is easy; assuming you have created a scratch directory called 'jbloggs' on scratchcomp04, the following command will restrict access to yourself only:
+chmod 700 /scratchcomp04/jbloggs
+You can now check the permissions on your scratch directory:
+jbloggs@macomp04:~ $ ls -ld /scratchcomp04/jbloggs
+drwx------ 25 jbloggs mamsc21 4096 Apr 30 13:13 /scratchcomp04/jbloggs
+note the drwx------- in this case the 'd' signifies the folder is a directory while the following 'rwx' shows the owner (that is, yourself) has read, write and directory access permissions for that directory but no-one else in your group or globally has any access. This is because the group permissions (the three dashes following the owner's rwx permissions) and the world permissions (the final set of three dashes) are not set to anything - in effect, this means others in your mamsc21 group and all other users have no permissions to access your folder or the contents within.
+
+
+Andy Thomas
+
+ Research Computing Manager,
+Department of Mathematics
+last updated: 25.04.2023
