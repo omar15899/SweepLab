@@ -2,7 +2,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Callable
 from firedrake import *
 from firedrake.petsc import OptionsManager
 from dataclasses import dataclass
@@ -266,7 +266,7 @@ class PDESystem(object):
     mesh: Mesh
     V: Union[FunctionSpace, VectorFunctionSpace, MixedFunctionSpace]
     coord: SpatialCoordinate
-    f: function | List[function]
+    f: Callable | List[Callable]
     u0: Function  # (if system is mixed, use Function(V) withc .subfunctions[] already specified)
     boundary_conditions: tuple[DirichletBC | EquationBC]
     time_dependent_constants_bts: Constant | tuple[Constant] | None = None
@@ -1379,8 +1379,6 @@ def solve_heat_pde(
         is_parallel=is_parallel,
         solver_parameters={
             "snes_type": "newtonls",
-            "snes_rtol": 1e-14,
-            "snes_atol": 1e-16,
             "ksp_type": "preonly",
             "pc_type": "lu",
         },

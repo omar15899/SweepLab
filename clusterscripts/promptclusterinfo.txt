@@ -571,7 +571,7 @@ chmod 700 /scratchcomp04/jbloggs
 You can now check the permissions on your scratch directory:
 jbloggs@macomp04:~ $ ls -ld /scratchcomp04/jbloggs
 drwx------ 25 jbloggs mamsc21 4096 Apr 30 13:13 /scratchcomp04/jbloggs
-note the drwx------- in this case the 'd' signifies the folder is a directory while the following 'rwx' shows the owner (that is, yourself) has read, write and directory access permissions for that directory but no-one else in your group or globally has any access. This is because the group permissions (the three dashes following the owner's rwx permissions) and the world permissions (the final set of three dashes) are not set to anything - in effect, this means others in your mamsc21 group and all other users have no permissions to access your folder or the contents within.
+note the drwx------- in this case the 'd' signifies the folder is a directory while the following 'rwx' shows the owner (that is, yourself) has read, write and directory access permissions for that directory but no-one else in your group or globally has any access. This is because the group permissions (the three dashes following the owner's rwx permissions) and the world permissions (the final set of three dashes) are not set to anything - in effect, this means others in your mamsc21 group and all aother users have no permissions to access your folder or the contents within.
 
 
 Andy Thomas
