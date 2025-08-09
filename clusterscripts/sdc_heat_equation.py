@@ -1267,14 +1267,15 @@ def _resolve_base_output_dir(path_name: str | None) -> Path:
     if env_out:
         return Path(env_out)
 
-    user = os.environ.get("USER", "")
-    if user:
-        cluster_home = Path(f"/home/clustor2/ma/{user[0]}/{user}")
-        if cluster_home.exists():
-            return cluster_home / "solver_results" / "heatfiles"
+    # Preferir clustor2 si existe
+    user = os.environ.get("USER") or os.path.basename(str(Path.home()))
+    if user and len(user) > 0:
+        cl2_base = Path(f"/home/clustor2/ma/{user[0]}/{user}")
+        if cl2_base.exists():
+            return cl2_base / "solver_results" / "heatfiles"
 
+    # macOS: ~/solver_results/heatfiles
     if platform.system() == "Darwin":
-        # Opción Mac explícita que pedías, conservando estructura de nombres nueva
         return Path.home() / "solver_results" / "heatfiles"
 
     # Fallback genérico

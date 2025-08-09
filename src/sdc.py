@@ -578,7 +578,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         on space and time if needed. X will be inputed considering that they
         are going to be the coordinates OBJECT over the mesh.
 
-        NEEDS_TO_BE_REARRANGED_FOR_CLARITY_PURPOSES
         """
 
         def _update_exact_field(t_now: float):
@@ -627,7 +626,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             ]
         }
 
-        # ---------------- Dyadic saving (max. 10k snapshots) ----------------
         # Choose a stride as a power of 2 so that output times align between runs
         # with dyadic time steps. Ensures consistent output times for comparisons.
         save_max = max_diadic

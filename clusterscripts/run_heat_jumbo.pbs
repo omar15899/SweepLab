@@ -1,0 +1,79 @@
+#!/bin/bash
+#PBS -N run_heat_fast
+#PBS -q standard
+# Solicitas 1 núcleo, ~1.9GB RAM, 30 min (ajusta walltime/mem si hace falta)
+#PBS -l nodes=1:ppn=1,mem=1900mb,walltime=00:30:00
+# Unificamos stdout/err
+#PBS -j oe
+# Logs de PBS a clustor2
+#PBS -o /home/clustor2/ma/o/ok24/logs/${PBS_JOBID}.log
+# Exporta entorno
+#PBS -V
+
+# --- seguridad y trazas ---
+set -euo pipefail
+mkdir -p /home/clustor2/ma/o/ok24/logs
+exec >"/home/clustor2/ma/o/ok24/logs/${PBS_JOBID}.log" 2>&1
+set -x
+echo "[START] $(date) host=$(hostname) job=${PBS_JOBID} user=${USER}"
+
+# --- hilos BLAS/OpenMP a 1 (HPC-friendly) ---
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+       BLIS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+       GOTO_NUM_THREADS=1
+
+# --- activar firedrake del sistema ---
+source /usr/local/firedrake/bin/activate
+
+# --- TODO EN CLUSTOR2 -------------------------------------------------------
+# Home "efectivo" y cachés en clustor2 (antes de importar firedrake)
+export HOME=/home/clustor2/ma/o/ok24
+export XDG_CACHE_HOME="$HOME/.cache"
+export PYOP2_CACHE_DIR="$XDG_CACHE_HOME/pyop2"
+export TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export TSFC_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export PYOP2_ALWAYS_REBUILD=1
+mkdir -p "$PYOP2_CACHE_DIR" "$TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"
+
+# Resultados del solver (h5/json/vtk) también en clustor2
+export SDC_OUTPUT_DIR=/home/clustor2/ma/o/ok24/solver_results/heatfiles
+mkdir -p "$SDC_OUTPUT_DIR"
+
+# --- directorio de trabajo coherente (clustor2) ---
+cd /home/clustor2/ma/o/ok24
+
+# --- versión de Python para diagnóstico ---
+which python3
+python3 -V
+
+# --- lanzar tu script con entorno limpio (cerrar con PY, sin espacios) ---
+python3 - <<'PY'
+import os, pathlib, runpy
+
+home = "/home/clustor2/ma/o/ok24"
+print("[PY] cwd =", os.getcwd())
+
+# Reafirmar caches dentro del intérprete (antes de importar firedrake)
+env = {
+    "XDG_CACHE_HOME": f"{home}/.cache",
+    "PYOP2_CACHE_DIR": f"{home}/.cache/pyop2",
+    "TSFC_KERNEL_CACHE_DIR": f"{home}/.cache/tsfc",
+    "TSFC_CACHE_DIR": f"{home}/.cache/tsfc",
+    "FIREDRAKE_TSFC_KERNEL_CACHE_DIR": f"{home}/.cache/tsfc",
+    "PYOP2_ALWAYS_REBUILD": "1",
+    "SDC_OUTPUT_DIR": f"{home}/solver_results/heatfiles",
+}
+os.environ.update(env)
+for k,v in env.items():
+    print(f"[PY] {k}={v}")
+for d in ("PYOP2_CACHE_DIR","TSFC_KERNEL_CACHE_DIR","XDG_CACHE_HOME"):
+    pathlib.Path(os.environ[d]).mkdir(parents=True, exist_ok=True)
+
+import firedrake
+print("[PY] firedrake OK")
+
+# Ejecuta tu solver (archivo ya copiado a clustor2)
+runpy.run_path("/home/clustor2/ma/o/ok24/clusterscripts/sdc_heat_equation.py", run_name="__main__")
+print("[PY] done.")
+PY
