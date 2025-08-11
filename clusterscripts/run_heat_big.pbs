@@ -68,6 +68,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 
 source /usr/local/firedrake/bin/activate
 
+# caches en HOME
 export HOME=/home/ma/o/ok24
 export XDG_CACHE_HOME="$HOME/.cache"
 export PYOP2_CACHE_DIR="$XDG_CACHE_HOME/pyop2"
@@ -87,9 +88,9 @@ FLAT="$STAGE/__flat__"
 DEST="/home/clustor2/ma/o/ok24/solver_results/heatfiles/all_cluster_runs"
 mkdir -p "$STAGE" "$FLAT" "$DEST"
 
-# firedrake writes in STAGE
+# firedrake escribe en STAGE
 export SDC_OUTPUT_DIR="$STAGE"
-# export dest for python-side flush
+# export dest para flush desde python (opcional)
 export SDC_DEST_DIR="$DEST"
 
 # ---------- flatten + rsync ----------
@@ -97,6 +98,7 @@ rsync_flatten_and_push() {
   local log="/home/ma/o/ok24/logs/rsync_${PBS_JOBID}.${PBS_ARRAYID:-0}.log"
   {
     echo "[RSYNC] listing $STAGE"
+    mkdir -p "$FLAT"   # asegura que __flat__ existe incluso si alguien lo borro antes
     find "$STAGE" -type f \( -name '*.h5' -o -name '*.json' -o -name '*_log.txt' -o -name '*__log.txt' \) -print0 \
     | while IFS= read -r -d '' f; do
         rel="${f#"$STAGE/"}"
@@ -107,7 +109,8 @@ rsync_flatten_and_push() {
     rsync -av --remove-source-files "$FLAT"/ "$DEST"/ || true
     echo "[RSYNC] done"
   } >>"$log" 2>&1
-  find "$STAGE" -type d -empty -delete || true
+  # limpia directorios vacios de STAGE (pero no borra __flat__)
+  find "$STAGE" -type d -not -path "$FLAT" -empty -delete || true
 }
 
 trap 'echo "[TRAP] flushing on exit"; rsync_flatten_and_push' EXIT
@@ -130,7 +133,7 @@ else:
     M=list(range(1,11))
 
 TFINAL=1.0
-DEGREE=1
+DEGREE_LIST=[1,2,3,4]  # barrido de degree 1..4
 
 idx = int(os.environ.get("PBS_ARRAYID","0"))
 combos = list(product(NCELLS, DT, M))
@@ -144,24 +147,27 @@ dest  = Path(os.environ.get("SDC_DEST_DIR","/home/clustor2"))
 flat.mkdir(parents=True, exist_ok=True)
 
 def py_flatten_and_push():
-    # flatten any interesting file under STAGE
+    # aplanar cualquier fichero interesante bajo STAGE
     for root, dirs, files in os.walk(stage):
         for name in files:
             if not (name.endswith(".h5") or name.endswith(".json") or name.endswith("_log.txt") or name.endswith("__log.txt")):
                 continue
             src = Path(root) / name
-            rel = src.relative_to(stage).as_posix()
+            try:
+                rel = src.relative_to(stage).as_posix()
+            except Exception:
+                continue
             out = rel.replace("/", "__")
             try:
                 shutil.move(str(src), str(flat / out))
             except Exception:
                 pass
-    # rsync to DEST
+    # rsync a DEST
     subprocess.run(["rsync","-av","--remove-source-files", str(flat)+"/", str(dest)+"/"], check=False)
-    # clean empty dirs under STAGE
+    # limpiar vacios bajo STAGE sin tocar __flat__
     try:
         for p in sorted(stage.rglob("*"), reverse=True):
-            if p.is_dir():
+            if p.is_dir() and p.name != "__flat__":
                 try: p.rmdir()
                 except Exception: pass
     except Exception:
@@ -170,28 +176,29 @@ def py_flatten_and_push():
 variants = []
 for prectype in ("MIN-SR-FLEX", "MIN-SR-NS"):
     for is_par in (True, False):
-        params = {
-            "n_cells": n,
-            "dt": dt,
-            "M": m,
-            "sweeps": sweeps,
-            "Tfinal": TFINAL,
-            "degree": DEGREE,
-            "is_parallel": is_par,
-            "prectype": prectype,
-            "analysis": True,
-            "mode": "checkpoint",
-            "folder_name": "all_cluster_runs",
-            "path_name": str(stage),
-        }
-        variants.append(params)
+        for deg in DEGREE_LIST:
+            params = {
+                "n_cells": n,
+                "dt": dt,
+                "M": m,
+                "sweeps": sweeps,
+                "Tfinal": TFINAL,
+                "degree": deg,
+                "is_parallel": is_par,
+                "prectype": prectype,
+                "analysis": True,
+                "mode": "checkpoint",
+                "folder_name": "all_cluster_runs",
+                "path_name": str(stage),
+            }
+            variants.append(params)
 
 for v in variants:
     os.environ["SDC_PARAMS_JSON"] = json.dumps(v)
     print("[RUN]", v)
     runpy.run_path("/home/clustor2/ma/o/ok24/clusterscripts/sdc_heat_equation.py",
                    run_name="__main__")
-    # push after each variant
+    # flush tras cada variante
     py_flatten_and_push()
 
 print("[PY] all variants done.")
