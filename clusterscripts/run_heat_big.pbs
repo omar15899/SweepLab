@@ -95,22 +95,24 @@ export SDC_DEST_DIR="$DEST"
 
 # ---------- flatten + rsync ----------
 rsync_flatten_and_push() {
-  local log="/home/ma/o/ok24/logs/rsync_${PBS_JOBID}.${PBS_ARRAYID:-0}.log"
-  {
-    echo "[RSYNC] listing $STAGE"
-    mkdir -p "$FLAT"   # asegura que __flat__ existe incluso si alguien lo borro antes
-    find "$STAGE" -type f \( -name '*.h5' -o -name '*.json' -o -name '*_log.txt' -o -name '*__log.txt' \) -print0 \
-    | while IFS= read -r -d '' f; do
-        rel="${f#"$STAGE/"}"
-        out="${rel//\//__}"
-        mv -f -- "$f" "$FLAT/$out" || true
-      done
-    echo "[RSYNC] -> $DEST"
-    rsync -av --remove-source-files "$FLAT"/ "$DEST"/ || true
-    echo "[RSYNC] done"
-  } >>"$log" 2>&1
-  # limpia directorios vacios de STAGE (pero no borra __flat__)
-  find "$STAGE" -type d -not -path "$FLAT" -empty -delete || true
+  local STAGE="$1"
+  local DEST="$2"
+
+  echo "[RSYNC] listing $STAGE"
+  mkdir -p "$STAGE/__flat__"
+
+  # Aplana y renombra (sustituye / por __)
+  while IFS= read -r -d '' f; do
+    rel="${f#"$STAGE/"}"
+    out="${rel//\//__}"
+    mv -f -- "$f" "$STAGE/__flat__/$out"   # <- OJO la barra aquí
+  done < <(find "$STAGE" -type f \
+      \( -name '*.h5' -o -name '*.json' -o -name '*_log.txt' -o -name '*__log.txt' \) \
+      -print0)
+
+  echo "[RSYNC] -> $DEST"
+  rsync -av --remove-source-files --exclude='__flat__*' "$STAGE/__flat__/" "$DEST/"
+  echo "[RSYNC] done"
 }
 
 trap 'echo "[TRAP] flushing on exit"; rsync_flatten_and_push' EXIT

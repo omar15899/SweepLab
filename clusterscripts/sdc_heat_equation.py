@@ -51,6 +51,16 @@ class FileNamer:
         self.mode = mode
         self.file = self._create_unique_path()
 
+        # Asegura la carpeta del fichero principal (.h5/.pvd/…)
+        Path(self.file).parent.mkdir(parents=True, exist_ok=True)
+
+        # Log PETSc
+        self._log_txt = Path(self.file).with_suffix("").as_posix() + "_log.txt"
+        Path(self._log_txt).parent.mkdir(parents=True, exist_ok=True)  # <--- AQUI
+        PETSc.Options().setValue("log_view", f":{self._log_txt}")
+        if "log_view" not in OptionsManager.commandline_options:
+            PETSc.Log.begin()
+
         # Log Time initialisation
         self._log_txt = Path(self.file).with_suffix("").as_posix() + "_log.txt"
         PETSc.Options().setValue("log_view", f":{self._log_txt}")
@@ -90,7 +100,7 @@ class FileNamer:
             all_folders = {
                 name
                 for name in os.listdir(self.path_name)
-                if os.path.isdir(self.path_name)
+                if os.path.isdir(os.path.join(self.path_name, name))
             }
 
             i = 0
@@ -100,7 +110,9 @@ class FileNamer:
                     break
                 i += 1
 
-            return os.path.join(self.path_name, folder_name, base_name + ".pvd")
+            vtk_path = os.path.join(self.path_name, folder_name, base_name + ".pvd")
+            os.makedirs(os.path.dirname(vtk_path), exist_ok=True)  # <--- AQUI
+            return vtk_path
 
 
 @dataclass
@@ -1251,6 +1263,15 @@ now = datetime.now()
 time_str = now.strftime("%Y_%m_%d_%H_%M_%S")
 
 
+def _is_cluster_env() -> bool:
+    """Heurística robusta para distinguir cluster vs Mac."""
+    if os.environ.get("PBS_JOBID"):
+        return True
+    if Path("/home/clustor2").exists():
+        return True
+    return platform.system() != "Darwin"
+
+
 def _resolve_base_output_dir(path_name: str | None) -> Path:
     """
     Prioridad:
@@ -1319,26 +1340,26 @@ def solve_heat_pde(
     # ---- Nombre del archivo (detallado, no cambia) ----
     dt_str = f"{dt:.2e}".replace(".", "p")
     Tfinal_str = f"{Tfinal:.2e}".replace(".", "p")
+    residual = "par" if is_parallel else "global"
     file_name = (
         f"heat_n{n_cells}_dt{dt_str}_sw{nsweeps}_nodes{M}_deg{degree}_"
-        f"prectype{prectype}_tfinal{Tfinal_str}_par{str(is_parallel)}"
+        f"prectype{prectype}_{residual}_tfinal{Tfinal_str}"
     )
 
     # ---- Nueva organización de carpetas ----
     # Grupo por precondicionador + tipo de residual (par/global)
-    residual = "par" if is_parallel else "global"
-    group = f"{prectype}_{residual}"
-
-    # Base: prioridad a path_name, luego env/cluster/Mac como pedías
     base_dir = _resolve_base_output_dir(path_name)
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    # Subcarpeta numerada: <group>/run_0001, run_0002, ...
-    auto_folder = _next_run_subfolder(base_dir, group)
+    if _is_cluster_env():
+        # Fuerza una sola carpeta para TODO en el cluster
+        folder_name = "all_cluster_runs"
+    else:
+        # En macOS, conserva la organización por grupo y runs numerados
+        group = f"{prectype}_{residual}"
+        auto_folder = _next_run_subfolder(base_dir, group)
+        folder_name = folder_name or auto_folder
 
-    # Si el usuario no fuerza folder_name, usamos la numeración
-    folder_name = folder_name or auto_folder
-    # FileNamer espera str
     path_name_str = str(base_dir)
 
     # =================== Definición del caso ===================
