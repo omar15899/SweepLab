@@ -10,10 +10,12 @@ BASE_DEST="${HOME_DIR}/solver_results/heatfiles/all_cluster_runs"
 LOGDIR="${HOME_DIR}/logs"
 MAIL_TO="ok24@ic.ac.uk"
 
+# FLAGS
 SMOKE_DEFAULT="${SMOKE:-0}"
-MAX_SIM=30
+MAX_SIM_DEFAULT="${MAX_SIM:-128}"
+WALLTIME_DEFAULT="${WALLTIME:-500:00:00}"
 
-# ENVIO DEL ARRAY
+# ---------- ENVIO DEL ARRAY ----------
 if [ -z "${PBS_JOBID:-}" ]; then
   if [ "${SMOKE_DEFAULT}" = "1" ]; then
     TOTAL=4
@@ -27,30 +29,62 @@ PY
 )
   fi
 
-  Q=${FORCE_QUEUE:-medium}
+  # memoria sugerida por cola
   declare -A MEM=(
+    [standard]=1900mb
     [medium]=7900mb
-    [firedrake]=12900mb
     [jumbo]=15500mb
     [large32]=32gb
+    [large64]=64gb
+    [large128]=128gb
+    [large256]=256gb
+    [large512]=512gb
+    [firedrake]=12900mb
   )
+
+  # cola a usar  si no se fija FORCE_QUEUE se usa standard
+  Q=${FORCE_QUEUE:-standard}
+  if ! qstat -Q "$Q" >/dev/null 2>&1; then
+    echo "[WARN] queue $Q no existe usando standard"
+    Q=standard
+  fi
 
   mkdir -p "$LOGDIR"
 
+  # MEMREQUEST permite sobrescribir memoria  por defecto usa la de la cola
+  MEMREQ="${MEM_REQUEST:-${MEM[$Q]:-7900mb}}"
+  # fix para large64  no pedir 64gb exactos  usar 65535mb
+  if [[ "$Q" == "large64" && "$MEMREQ" =~ ^[[:space:]]*64[[:space:]]*gb[[:space:]]*$ ]]; then
+    MEMREQ="65535mb"
+  fi
+
+  # construir recursos  con features si FORCE_PROP esta definido
+  if [ -n "${FORCE_PROP:-}" ]; then
+    FEAT="${FORCE_PROP//,/:}"
+    QSUB_RES=(-l "nodes=1:ppn=1:${FEAT}" -l "mem=${MEMREQ}")
+  else
+    QSUB_RES=(-l "select=1:ncpus=1:mem=${MEMREQ}")
+  fi
+
+  echo "[SUBMIT] array TOTAL=${TOTAL} queue=${Q} mem=${MEMREQ} cap=${MAX_SIM_DEFAULT} feature=${FORCE_PROP:-none}"
+
   exec qsub -q "$Q" \
     -N run_heat_all \
-    -l select=1:ncpus=1:mem="${MEM[$Q]:-7900mb}" \
-    -l walltime=100:00:00 \
+    "${QSUB_RES[@]}" \
+    -l walltime="${WALLTIME_DEFAULT}" \
     -m bea -M "${MAIL_TO}" \
     -j oe \
     -o "${LOGDIR}" \
     -v SMOKE="${SMOKE_DEFAULT}" \
     -v FORCE_QUEUE="${FORCE_QUEUE:-}" \
-    -t 0-$((TOTAL-1))%${MAX_SIM} \
+    -v FORCE_PROP="${FORCE_PROP:-}" \
+    -v MAX_SIM="${MAX_SIM_DEFAULT}" \
+    -v MEM_REQUEST="${MEM_REQUEST:-}" \
+    -t 0-$((TOTAL-1))%${MAX_SIM_DEFAULT} \
     "$0"
 fi
 
-# CONTEXTO DE EJECUCION
+# ---------- CONTEXTO DE EJECUCION ----------
 set -x
 umask 0022
 echo "[START] $(date) host=$(hostname) job=${PBS_JOBID} arr=${PBS_ARRAYID:-0} user=${USER}"
@@ -62,7 +96,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 export HOME="${HOME_DIR}"
 mkdir -p "$LOGDIR" "$BASE_DEST"
 
-# ACTIVAR FIREDRAKE
+# activar firedrake
 if [ -f "/usr/local/firedrake/bin/activate" ]; then
   source /usr/local/firedrake/bin/activate
 elif [ -f "${HOME}/firedrake/bin/activate" ]; then
@@ -77,23 +111,23 @@ cd "${HOME_DIR}"
 which python3
 python3 -V
 
-# CARPETA DE TRABAJO DE ESTA TAREA
+# carpeta por tarea
 DEST="${BASE_DEST}/run_${PBS_ARRAYID}"
 mkdir -p "$DEST"
 
-# ESCRIBIR DIRECTO EN DEST
+# escribir directo en DEST
 export SDC_OUTPUT_DIR="$DEST"
 export SDC_DEST_DIR="$DEST"
 
-# DESTINO HOMONIMO EN CLUSTOR2
+# destino homonimo en clustor2
 CLUSTOR2_BASE="${BASE_DEST/\/home\/ma/\/home\/clustor2\/ma}"
 CLUSTOR2_DEST="${CLUSTOR2_BASE}/run_${PBS_ARRAYID}"
 mkdir -p "$CLUSTOR2_DEST"
 export CLUSTOR2_DEST
 
-# TRABAJO PYTHON CON COPIA POR VARIANTE
+# ---------- TRABAJO PYTHON CON COPIA POR VARIANTE ----------
 python3 -u - <<'PY'
-import os, json, runpy, subprocess
+import os, json, runpy, subprocess, time, random
 from itertools import product
 from pathlib import Path
 
@@ -143,8 +177,8 @@ if not script.exists():
     raise FileNotFoundError(f"script no encontrado {script}")
 
 def sync_to_cl2():
+    time.sleep(random.uniform(0, 3.0))
     subprocess.run(["rsync","-av","--remove-source-files", f"{dest}/", f"{cl2}/"], check=False)
-    # limpieza de directorios vacios en dest
     for p in sorted(dest.rglob("*"), reverse=True):
         if p.is_dir():
             try: p.rmdir()
@@ -153,10 +187,8 @@ def sync_to_cl2():
 for v in variants:
     os.environ["SDC_PARAMS_JSON"] = json.dumps(v)
     runpy.run_path(str(script), run_name="__main__")
-    # copia a clustor2 tras cada variante
     sync_to_cl2()
 
-# copia final por si quedo algo pendiente
 sync_to_cl2()
 print("[PY] todas las variantes finalizadas")
 PY
