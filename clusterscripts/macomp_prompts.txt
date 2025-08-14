@@ -53,3 +53,25 @@ qsub -q parallel64 \
   -m abe -M ok24@ic.ac.uk \
   -v SMOKE=0,NCELLS_LIST="128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST="1 2 3 4",MAX_WORKERS=48,OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1 \
   /home/ma/o/ok24/clusterscripts/heat_8_funciona.pbs
+
+
+
+
+
+# JOB A (N = 8,16,32,64)
+qsub -q parallel64 \
+  -N sdc_mesh_pool_A \
+  -l select=1:ncpus=1,mem=128gb \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_A.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="8 16 32 64",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX MIN-SR-NS",IS_PAR_LIST="1 0",MAX_WORKERS=48,OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1 \
+  /home/ma/o/ok24/clusterscripts/heat_9_funciona.pbs
+
+# JOB B (N = 128,256,512)
+qsub -q parallel64 \
+  -N sdc_mesh_pool_B \
+  -l select=1:ncpus=1,mem=128gb \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_B.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX MIN-SR-NS",IS_PAR_LIST="1 0",MAX_WORKERS=48,OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1 \
+  /home/ma/o/ok24/clusterscripts/heat_9_funciona.pbs
