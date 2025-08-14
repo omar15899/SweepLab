@@ -1,0 +1,43 @@
+#!/bin/bash
+#PBS -N test_write_cl2
+#PBS -q medium
+#PBS -l select=1:ncpus=1:mem=2gb
+#PBS -l walltime=00:03:00
+#PBS -j oe
+#PBS -o $HOME/logs/test_write_cl2.$PBS_JOBID.log
+
+set -euo pipefail
+mkdir -p "$HOME/logs"
+
+export HDF5_USE_FILE_LOCKING=FALSE
+export HDF5_DISABLE_FILE_LOCKING=1
+export HDF5_DISABLE_VERSION_CHECK=2
+export HDF5_DRIVER=sec2
+
+DEST="/home/clustor2/ma/o/$USER/test_write_$(date +%s)"
+export DEST
+mkdir -p "$DEST"
+
+{
+  echo "[INFO] host=$(hostname)"
+  echo "[INFO] user=$USER"
+  echo "[INFO] date=$(date)"
+  echo "[INFO] pwd=$PWD"
+} > "$DEST/test.txt"
+
+echo "hello" > "$DEST/posix_ok.txt"
+
+python3 - <<'PY' || true
+import os, numpy as np
+p = os.environ.get("DEST")
+try:
+    import h5py, os.path as op
+    with h5py.File(op.join(p, "h5_ok.h5"), "w") as f:
+        f["x"] = np.arange(5)
+    print("[H5] ok")
+except Exception as e:
+    print("[H5] skip or fail:", e)
+PY
+
+echo "[INFO] listing:"
+ls -l "$DEST"

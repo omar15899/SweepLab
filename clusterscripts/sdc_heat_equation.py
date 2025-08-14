@@ -61,12 +61,6 @@ class FileNamer:
         if "log_view" not in OptionsManager.commandline_options:
             PETSc.Log.begin()
 
-        # Log Time initialisation
-        self._log_txt = Path(self.file).with_suffix("").as_posix() + "_log.txt"
-        PETSc.Options().setValue("log_view", f":{self._log_txt}")
-        if "log_view" not in OptionsManager.commandline_options:
-            PETSc.Log.begin()
-
         # if self.mode not in self.extensions.values():
         #     raise Exception("Invalid mode.")
 
@@ -1346,16 +1340,15 @@ def solve_heat_pde(
         f"prectype{prectype}_{residual}_tfinal{Tfinal_str}"
     )
 
-    # ---- Nueva organización de carpetas ----
-    # Grupo por precondicionador + tipo de residual (par/global)
     base_dir = _resolve_base_output_dir(path_name)
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    if _is_cluster_env():
-        # Fuerza una sola carpeta para TODO en el cluster
+    # if caller gives a path_name (absolute DEST), do not nest a subfolder
+    if path_name is not None:
+        folder_name = folder_name or "."
+    elif _is_cluster_env():
         folder_name = "all_cluster_runs"
     else:
-        # En macOS, conserva la organización por grupo y runs numerados
         group = f"{prectype}_{residual}"
         auto_folder = _next_run_subfolder(base_dir, group)
         folder_name = folder_name or auto_folder

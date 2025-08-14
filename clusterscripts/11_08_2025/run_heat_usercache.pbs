@@ -1,0 +1,45 @@
+#!/bin/bash
+#PBS -N run_heat_fast
+#PBS -q standard
+#PBS -l nodes=1:ppn=1,mem=1900mb,walltime=00:30:00
+#PBS -m bea
+#PBS -M ok24@ic.ac.uk
+#PBS -j oe
+#PBS -o /home/ma/o/ok24/logs/${PBS_JOBID}.log
+#PBS -V
+
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+mkdir -p /home/ma/o/ok24/logs
+exec >"/home/ma/o/ok24/logs/${PBS_JOBID}.log" 2>&1
+
+# Activa firedrake
+source /usr/local/firedrake/bin/activate
+
+# **Fija cachés de usuario ANTES de importar nada**
+export HOME=/home/ma/o/ok24
+export XDG_CACHE_HOME="$HOME/.cache"
+export PYOP2_CACHE_DIR="$XDG_CACHE_HOME/pyop2"
+export TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export TSFC_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="$XDG_CACHE_HOME/tsfc"
+export PYOP2_ALWAYS_REBUILD=1
+mkdir -p "$PYOP2_CACHE_DIR" "$TSFC_KERNEL_CACHE_DIR"
+
+cd /home/ma/o/ok24
+
+# Enforce dentro de Python *antes* del primer import
+python3 - <<'PY'
+import os, pathlib, runpy
+home="/home/ma/o/ok24"
+os.environ["XDG_CACHE_HOME"]=f"{home}/.cache"
+os.environ["PYOP2_CACHE_DIR"]=f"{home}/.cache/pyop2"
+os.environ["TSFC_KERNEL_CACHE_DIR"]=f"{home}/.cache/tsfc"
+os.environ["TSFC_CACHE_DIR"]=f"{home}/.cache/tsfc"
+os.environ["FIREDRAKE_TSFC_KERNEL_CACHE_DIR"]=f"{home}/.cache/tsf
+os.environ["PYOP2_ALWAYS_REBUILD"]="1"
+for d in ("PYOP2_CACHE_DIR","TSFC_KERNEL_CACHE_DIR"):
+    pathlib.Path(os.environ[d]).mkdir(parents=True, exist_ok=True)
+
+import firedrake  # <-- ya con env correcto
+runpy.run_path("sdc_heat_equation.py", run_name="__main__")

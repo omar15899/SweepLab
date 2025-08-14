@@ -1,0 +1,162 @@
+#!/bin/bash
+#PBS -N sdc_mesh_pool
+#PBS -q medium
+#PBS -j oe
+#PBS -m abe
+#PBS -M ok24@ic.ac.uk
+# Pide 6 cores en medium (máx 8) y 7GB (máx 8GB)
+#PBS -l nodes=1:ppn=6,mem=7gb,walltime=01:00:00
+#PBS -V
+
+set -euo pipefail
+umask 077
+
+# ---- entorno numérico (evita conflictos NumPy/BLAS) ----
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH || true
+
+# ---------- rutas ----------
+USR="${USR:-ok24}"
+HOME_DIR="/home/ma/o/${USR}"
+PY_SCRIPT="${PY_SCRIPT:-${HOME_DIR}/clusterscripts/sdc_heat_equation.py}"
+FINAL_ROOT="${FINAL_ROOT:-/home/clustor2/ma/o/${USR}/solver_results/heatfiles/mesh_runs}"
+LOGDIR="${LOGDIR:-/home/clustor2/ma/o/${USR}/logs}"
+mkdir -p "$FINAL_ROOT" "$LOGDIR"
+
+# ---------- Firedrake ----------
+# shellcheck disable=SC1091
+source /usr/local/firedrake/bin/activate
+
+# Preflight visible en el .o
+python3 - <<'PY'
+import sys, numpy, petsc4py; import firedrake
+print("OK env:", "py",sys.version.split()[0], "np",numpy.__version__, "petsc4py",petsc4py.__version__)
+PY
+
+# ---------- scratch del nodo ----------
+HNAME=$(hostname)
+NN="${HNAME#macomp}"
+SCRATCH="/scratchcomp${NN}"
+[ -d "$SCRATCH" ] && [ -w "$SCRATCH" ] || SCRATCH="${TMPDIR:-/tmp}"
+RUNROOT="${SCRATCH%/}/sdc_${PBS_JOBID%%.*}"
+mkdir -p "$RUNROOT"
+cleanup(){ rm -rf "$RUNROOT" 2>/dev/null || true; }
+trap cleanup EXIT
+
+# ---------- IO/HDF5 seguro ----------
+export HDF5_USE_FILE_LOCKING=FALSE
+export HDF5_DISABLE_FILE_LOCKING=1
+export HDF5_DISABLE_VERSION_CHECK=2
+export HDF5_DRIVER=sec2
+export PYTHONUNBUFFERED=1
+
+# ---------- parámetros ----------
+SMOKE="${SMOKE:-1}"
+TFINAL="${TFINAL:-1.0}"
+if [ "$SMOKE" = "1" ]; then
+  NCELLS_LIST="${NCELLS_LIST:-8}"
+  DT_LIST="${DT_LIST:-5e-1}"   # tu petición
+  M_LIST="${M_LIST:-6}"
+  DEGREE_LIST="${DEGREE_LIST:-1}"
+else
+  NCELLS_LIST="${NCELLS_LIST:-8 16 32 64}"
+  DT_LIST="${DT_LIST:-5e-1}"
+  M_LIST="${M_LIST:-6}"
+  DEGREE_LIST="${DEGREE_LIST:-1}"
+fi
+
+# --- helper: JSON apuntando SIEMPRE al scratch local ---
+build_params_json () {
+  python3 - <<'PY'
+import json, os
+def fget(k,d): return float(os.environ.get(k,str(d)))
+def iget(k,d): return int(os.environ.get(k,str(d)))
+def bget(k,d): return str(os.environ.get(k,str(int(d)))).lower() in ("1","true","yes","on")
+cfg = dict(
+  dt=fget("DT",5e-1),
+  n_cells=iget("NCELLS",8),
+  sweeps=iget("SWEEPS",iget("M",6)),
+  M=iget("M",6),
+  Tfinal=fget("TFINAL",1.0),
+  is_parallel=bget("IS_PAR",True),
+  prectype=os.environ.get("PREC","MIN-SR-FLEX"),
+  degree=iget("DEGREE",1),
+  analysis=bget("ANALYSIS",True),
+  mode=os.environ.get("MODE","checkpoint"),
+  folder_name=".",
+  path_name=os.environ["OUTDIR"]
+)
+print(json.dumps(cfg))
+PY
+}
+
+# ---------- pool (1 core por caso) ----------
+# Si no das MAX_WORKERS, usa los cores asignados por PBS:
+if [ -z "${MAX_WORKERS:-}" ]; then
+  if [ -f "${PBS_NODEFILE:-}" ]; then
+    MAX_WORKERS=$(wc -l < "$PBS_NODEFILE")
+  else
+    MAX_WORKERS=1
+  fi
+fi
+echo "[INFO] cola=medium  MAX_WORKERS=$MAX_WORKERS  host=$(hostname)"
+
+pids=(); running=0
+launch_case () {
+  local n="$1" dt="$2" m="$3" deg="$4"
+  local out="${RUNROOT}/n${n}_dt${dt}_M${m}_deg${deg}"
+  mkdir -p "$out"
+
+  export PYOP2_CACHE_DIR="${out}/.cache/pyop2"
+  export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="${out}/.cache/firedrake/tsfc"
+  mkdir -p "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR"
+
+  export OUTDIR="$out"
+  export DT="$dt" NCELLS="$n" M="$m" SWEEPS="$m" TFINAL="$TFINAL"
+  export IS_PAR="1" PREC="MIN-SR-FLEX" DEGREE="$deg" ANALYSIS="1" MODE="checkpoint"
+  export SDC_OUTPUT_DIR="$out"
+  export SDC_PARAMS_JSON="$(build_params_json)"
+  export PETSC_OPTIONS="${PETSC_OPTIONS:-}-log_view :${out}/petsc.log"
+
+  echo "[RUN] n=$n dt=$dt M=$m deg=$deg -> $out"
+  (
+    set -e
+    python3 -u "$PY_SCRIPT" >"${out}/run.log" 2>&1
+    shopt -s nullglob
+    mkdir -p "$FINAL_ROOT"
+    for f in "$out"/*.h5 "$out"/*_convergence_results.json "$out"/*_log.txt; do
+      cp -f -- "$f" "$FINAL_ROOT"/
+    done
+    shopt -u nullglob
+    rm -rf "$out" || true
+  ) &
+  pids+=("$!")
+  running=$((running+1))
+}
+
+wait_one () {
+  if wait -n 2>/dev/null; then :; else
+    local pid="${pids[0]:-}"; [ -n "$pid" ] && wait "$pid" || true
+    pids=("${pids[@]:1}")
+  fi
+  running=$((running-1))
+}
+
+for DEGREE in $DEGREE_LIST; do
+  for NCELLS in $NCELLS_LIST; do
+    for DT in $DT_LIST; do
+      for M in $M_LIST; do
+        while [ "$running" -ge "$MAX_WORKERS" ]; do wait_one; done
+        launch_case "$NCELLS" "$DT" "$M" "$DEGREE"
+      done
+    done
+  done
+done
+while [ "$running" -gt 0 ]; do wait_one; done
+
+echo "[INFO] Terminado. Artefactos en: $FINAL_ROOT"
+ls -lh "$FINAL_ROOT" | sed -n '1,200p' || true

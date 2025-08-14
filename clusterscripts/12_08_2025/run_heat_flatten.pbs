@@ -1,0 +1,185 @@
+#!/bin/bash
+# run_heat_all_direct_home_flat_sync.pbs  escribe directo en HOME hace flatten y luego copia a clustor2
+set -euo pipefail
+
+# PARAMETROS BASE
+USR="ok24"
+HOME_DIR="/home/ma/o/${USR}"
+PY_SCRIPT="${HOME_DIR}/clusterscripts/sdc_heat_equation.py"
+BASE_DEST="${HOME_DIR}/solver_results/heatfiles/all_cluster_runs"
+LOGDIR="${HOME_DIR}/logs"
+MAIL_TO="ok24@ic.ac.uk"
+
+SMOKE_DEFAULT="${SMOKE:-0}"
+MAX_SIM=30
+
+# ENVIO DEL ARRAY
+if [ -z "${PBS_JOBID:-}" ]; then
+  if [ "${SMOKE_DEFAULT}" = "1" ]; then
+    TOTAL=4
+  else
+    TOTAL=$(python3 - <<'PY'
+NCELLS=[2,4,8,16,32,64,128,256,512]
+DT=[1e-1,1e-2,1e-3,1e-4,1e-5]
+M=list(range(1,11))
+print(len(NCELLS)*len(DT)*len(M))
+PY
+)
+  fi
+
+  Q=${FORCE_QUEUE:-medium}
+  declare -A MEM=(
+    [medium]=7900mb
+    [firedrake]=12900mb
+    [jumbo]=15500mb
+    [large32]=32gb
+  )
+
+  mkdir -p "$LOGDIR"
+
+  exec qsub -q "$Q" \
+    -N run_heat_all \
+    -l select=1:ncpus=1:mem="${MEM[$Q]:-7900mb}" \
+    -l walltime=100:00:00 \
+    -m bea -M "${MAIL_TO}" \
+    -j oe \
+    -o "${LOGDIR}" \
+    -v SMOKE="${SMOKE_DEFAULT}" \
+    -v FORCE_QUEUE="${FORCE_QUEUE:-}" \
+    -t 0-$((TOTAL-1))%${MAX_SIM} \
+    "$0"
+fi
+
+# CONTEXTO DE EJECUCION
+set -x
+umask 0022
+echo "[START] $(date) host=$(hostname) job=${PBS_JOBID} arr=${PBS_ARRAYID:-0} user=${USER}"
+
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+       BLIS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+       GOTO_NUM_THREADS=1
+
+export HOME="${HOME_DIR}"
+mkdir -p "$LOGDIR" "$BASE_DEST"
+
+# ACTIVAR FIREDRAKE
+if [ -f "/usr/local/firedrake/bin/activate" ]; then
+  source /usr/local/firedrake/bin/activate
+elif [ -f "${HOME}/firedrake/bin/activate" ]; then
+  source "${HOME}/firedrake/bin/activate"
+elif [ -f "/vol/firedrake/bin/activate" ]; then
+  source /vol/firedrake/bin/activate
+else
+  module load firedrake 2>/dev/null || true
+fi
+
+cd "${HOME_DIR}"
+which python3
+python3 -V
+
+# CARPETA DE TRABAJO DE ESTA TAREA
+DEST="${BASE_DEST}/run_${PBS_ARRAYID}"
+mkdir -p "$DEST"
+
+# ESCRIBIR DIRECTO EN DEST
+export SDC_OUTPUT_DIR="$DEST"
+export SDC_DEST_DIR="$DEST"
+
+# VARIABLES PARA FLATTEN
+# el script genera subcarpeta all_cluster_runs dentro de DEST
+STAGE_ROOT="${DEST}/all_cluster_runs"
+FLAT="${DEST}/__flat__"
+mkdir -p "$STAGE_ROOT" "$FLAT"
+
+# FUNCION DE FLATTEN
+flatten_and_push() {
+  local ROOT="${STAGE_ROOT}"
+  local OUT="${FLAT}"
+  mkdir -p "$OUT"
+
+  while IFS= read -r -d '' f; do
+    rel="${f#"$DEST/"}"
+    out="${rel//\//__}"
+    mv -f -- "$f" "$OUT/$out"
+  done < <(find "$ROOT" -type f \
+      \( -name '*.h5' -o -name '*.json' -o -name '*_log.txt' -o -name '*__log.txt' \) \
+      -print0)
+
+  rsync -av --remove-source-files "$OUT/" "$DEST/" || true
+
+  find "$ROOT" -type d -empty -delete 2>/dev/null || true
+}
+
+# ASEGURAR FLUSH AL SALIR
+trap 'flatten_and_push' EXIT
+
+# TRABAJO PYTHON
+python3 -u - <<'PY'
+import os, json, runpy
+from itertools import product
+from pathlib import Path
+
+SMOKE = os.environ.get("SMOKE","0") == "1"
+
+if SMOKE:
+    NCELLS=[8]; DT=[5e-2]; M=[6]
+else:
+    NCELLS=[2,4,8,16,32,64,128,256,512]
+    DT=[1e-1,1e-2,1e-3,1e-4,1e-5]
+    M=list(range(1,11))
+
+TFINAL=1.0
+DEGREE_LIST=[1,2,3,4]
+
+idx = int(os.environ.get("PBS_ARRAYID","0"))
+from itertools import product
+combos = list(product(NCELLS, DT, M))
+n, dt, m = combos[idx]
+sweeps = m
+
+dest = Path(os.environ.get("SDC_DEST_DIR"))
+dest.mkdir(parents=True, exist_ok=True)
+
+variants = []
+for prectype in ("MIN-SR-FLEX", "MIN-SR-NS"):
+    for is_par in (True, False):
+        for deg in DEGREE_LIST:
+            variants.append({
+                "n_cells": n,
+                "dt": dt,
+                "M": m,
+                "sweeps": sweeps,
+                "Tfinal": TFINAL,
+                "degree": deg,
+                "is_parallel": is_par,
+                "prectype": prectype,
+                "analysis": True,
+                "mode": "checkpoint",
+                "folder_name": "all_cluster_runs",
+                "path_name": str(dest),
+            })
+
+script = Path("/home/ma/o/ok24/clusterscripts/sdc_heat_equation.py")
+if not script.exists():
+    raise FileNotFoundError(f"script no encontrado {script}")
+
+for v in variants:
+    os.environ["SDC_PARAMS_JSON"] = json.dumps(v)
+    runpy.run_path(str(script), run_name="__main__")
+
+print("[PY] todas las variantes finalizadas")
+PY
+
+# FLATTEN FINAL
+flatten_and_push
+
+# COPIA FINAL A CLUSTOR2 EN CARPETA HOMONIMA
+CLUSTOR2_DEST="${DEST/\/home\/ma/\/home\/clustor2\/ma}"
+mkdir -p "$(dirname "$CLUSTOR2_DEST")"
+rsync -av "$DEST/" "$CLUSTOR2_DEST/"
+
+# LIMPIEZA SUAVE LOCAL DE AUXILIARES
+rmdir "$FLAT" 2>/dev/null || true
+rmdir "$STAGE_ROOT" 2>/dev/null || true
+
+echo "[END] $(date)"
