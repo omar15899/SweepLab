@@ -550,7 +550,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         use_collocation: bool,
         use_exact: bool,
     ) -> dict[str, float | None]:
-        """ """
+
         residual_sweep_vecs = (
             assemble(Rm).riesz_representation() for Rm in self.R_sweep
         )
@@ -562,6 +562,25 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         else:
             total_residual_collocation = 0.0
 
+        # Helpers
+        def _diff_fn(a: Function, b: Function) -> Function:
+            out = Function(a.function_space())
+            out.assign(a)
+            out -= b
+            return out
+
+        def _l2_space(f: Function) -> float:
+            return float((assemble(inner(f, f) * dx)) ** 0.5)
+
+        def _h1_semi_of_fn(f: Function) -> float:
+            return float((assemble(inner(grad(f), grad(f)) * dx)) ** 0.5)
+
+        def _time_L2(err_nodes: list[Function]) -> float:
+            w = np.asarray(self.Q[-1, :], dtype=float)  # pesos b_j (última fila de Q)
+            vals = np.array([_l2_space(e) for e in err_nodes], dtype=float)
+            return float(self.deltat * float(np.dot(w, vals**2))) ** 0.5
+
+        # Sweep vs Collocation
         if use_collocation:
             sweep_vs_coll_err = errornorm(
                 self.u_collocation.subfunctions[-1],
@@ -571,15 +590,22 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             sweep_vs_coll_comp = sum(
                 errornorm(u_c, u_k, norm_type="L2")
                 for u_c, u_k in zip(
-                    self.u_collocation.subfunctions,
-                    self.u_k_act.subfunctions,
+                    self.u_collocation.subfunctions, self.u_k_act.subfunctions
                 )
             )
+            e_nodes = [
+                _diff_fn(u_c, u_k)
+                for u_c, u_k in zip(
+                    self.u_collocation.subfunctions, self.u_k_act.subfunctions
+                )
+            ]
+            sweep_vs_coll_H1 = _h1_semi_of_fn(e_nodes[-1])
+            sweep_vs_coll_timeL2 = _time_L2(e_nodes)
         else:
-            sweep_vs_coll_err = None
-            sweep_vs_coll_comp = None
+            sweep_vs_coll_err = sweep_vs_coll_comp = None
+            sweep_vs_coll_H1 = sweep_vs_coll_timeL2 = None
 
-        # Errors real solution
+        # Sweep vs Real
         if use_exact and real_u is not None:
             sweep_vs_real_err = errornorm(
                 real_u.subfunctions[-1],
@@ -590,11 +616,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 errornorm(r_u, u_k, norm_type="L2")
                 for r_u, u_k in zip(real_u.subfunctions, self.u_k_act.subfunctions)
             )
+            e_nodes_real = [
+                _diff_fn(r, u_k)
+                for r, u_k in zip(real_u.subfunctions, self.u_k_act.subfunctions)
+            ]
+            sweep_vs_real_H1 = _h1_semi_of_fn(e_nodes_real[-1])
+            sweep_vs_real_timeL2 = _time_L2(e_nodes_real)
         else:
-            sweep_vs_real_err = None
-            sweep_vs_real_comp = None
+            sweep_vs_real_err = sweep_vs_real_comp = None
+            sweep_vs_real_H1 = sweep_vs_real_timeL2 = None
 
-        # Collocation errors vs real
+        # Collocation vs Real (comparativa)
         if use_collocation and use_exact and real_u is not None:
             coll_vs_real_err = errornorm(
                 self.u_collocation.subfunctions[-1],
@@ -608,8 +640,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 )
             )
         else:
-            coll_vs_real_err = None
-            coll_vs_real_comp = None
+            coll_vs_real_err = coll_vs_real_comp = None
 
         return {
             "total_residual_sweep": total_residual_sweep,
@@ -620,6 +651,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             "sweep_vs_real_compound_norm": sweep_vs_real_comp,
             "collocation_vs_real_errornorm": coll_vs_real_err,
             "collocation_vs_real_compound_norm": coll_vs_real_comp,
+            "sweep_vs_collocation_H1seminorm": sweep_vs_coll_H1,
+            "sweep_vs_real_H1seminorm": sweep_vs_real_H1,
+            "sweep_vs_collocation_timeL2": sweep_vs_coll_timeL2,
+            "sweep_vs_real_timeL2": sweep_vs_real_timeL2,
         }
 
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
@@ -1034,6 +1069,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     afile.save_mesh(self.mesh)
 
                     while t < T:
+                        # Contraction metrics (para delta_seq a posteriori)
+                        delta_prev = None
+                        rho_seq = []
+                        eps_delta = 1e-14
 
                         # Solve the full collocation solver
                         if analysis:
@@ -1055,6 +1094,23 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                     s.solve()
 
                             if analysis:
+
+                                try:
+                                    du = Function(
+                                        self.u_k_act.subfunctions[-1].function_space()
+                                    )
+                                    du.assign(self.u_k_act.subfunctions[-1])
+                                    du -= self.u_k_prev.subfunctions[-1]
+                                    delta = float(norm(du, norm_type="L2"))
+
+                                    if (delta_prev is not None) and (
+                                        delta_prev > eps_delta
+                                    ):
+                                        rho_seq.append(float(delta / delta_prev))
+                                    delta_prev = delta
+                                except Exception:
+                                    pass
+
                                 _update_exact_field(t) if use_exact else None
                                 analysis_metrics = self._compute_analysis_metrics(
                                     real_u if use_exact else None,
@@ -1076,6 +1132,15 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                         "collocation_vs_real_compound_norm"
                                     ],
                                 ]
+
+                                convergence_results[f"{step},{t},contraction"] = {
+                                    "delta_last": (
+                                        float(delta_prev)
+                                        if delta_prev is not None
+                                        else None
+                                    ),
+                                    "rho_seq": rho_seq[:],  # copia snapshot
+                                }
 
                                 timings = []
                                 for row in self._timings_buffer:
@@ -1394,6 +1459,8 @@ def solve_heat_pde(
         is_parallel=is_parallel,
         solver_parameters={
             "snes_type": "newtonls",
+            "snes_rtol": 1e-14,
+            "snes_atol": 1e-16,
             "ksp_type": "preonly",
             "pc_type": "lu",
         },
@@ -1437,7 +1504,7 @@ if __name__ == "__main__":
     else:
         # <<< tu bloque de pruebas local por defecto, si quieres >>>
         solve_heat_pde(
-            dt=5e-2,
+            dt=1e-2,
             n_cells=8,
             nsweeps=6,
             M=6,

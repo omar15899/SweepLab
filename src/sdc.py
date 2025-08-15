@@ -228,6 +228,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     # As Firedrake flattens the MixedFunctionSpace,
                     # we cannot have another MixedFunctionSpace nested!
                     local_bc = bc.reconstruct(V=(subspace))
+                    # local_bc = bc
                     bcs.append(local_bc)
                     local_bcs.setdefault(idx + m_node * self.lenV, []).append(local_bc)
 
@@ -275,6 +276,23 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         else:
             total_residual_collocation = 0.0
 
+        def _diff_fn(a: Function, b: Function) -> Function:
+            out = Function(a.function_space())
+            out.assign(a)
+            out -= b
+            return out
+
+        def _l2_space(f: Function) -> float:
+            return float((assemble(inner(f, f) * dx)) ** 0.5)
+
+        def _h1_semi_of_fn(f: Function) -> float:
+            return float((assemble(inner(grad(f), grad(f)) * dx)) ** 0.5)
+
+        def _time_L2(err_nodes: list[Function]) -> float:
+            w = np.asarray(self.Q[-1, :], dtype=float)  # pesos b_j (fila última de Q)
+            vals = np.array([_l2_space(e) for e in err_nodes], dtype=float)
+            return float(self.deltat * float(np.dot(w, vals**2))) ** 0.5
+
         if use_collocation:
             sweep_vs_coll_err = errornorm(
                 self.u_collocation.subfunctions[-1],
@@ -284,15 +302,24 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             sweep_vs_coll_comp = sum(
                 errornorm(u_c, u_k, norm_type="L2")
                 for u_c, u_k in zip(
-                    self.u_collocation.subfunctions,
-                    self.u_k_act.subfunctions,
+                    self.u_collocation.subfunctions, self.u_k_act.subfunctions
                 )
             )
+            e_nodes = [
+                _diff_fn(u_c, u_k)
+                for u_c, u_k in zip(
+                    self.u_collocation.subfunctions, self.u_k_act.subfunctions
+                )
+            ]
+            sweep_vs_coll_H1 = _h1_semi_of_fn(e_nodes[-1])
+            sweep_vs_coll_timeL2 = _time_L2(e_nodes)
         else:
             sweep_vs_coll_err = None
             sweep_vs_coll_comp = None
+            sweep_vs_coll_H1 = None
+            sweep_vs_coll_timeL2 = None
 
-        # Errors real solution
+        # Errores vs solución exacta
         if use_exact and real_u is not None:
             sweep_vs_real_err = errornorm(
                 real_u.subfunctions[-1],
@@ -303,11 +330,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 errornorm(r_u, u_k, norm_type="L2")
                 for r_u, u_k in zip(real_u.subfunctions, self.u_k_act.subfunctions)
             )
+            e_nodes_real = [
+                _diff_fn(r, u_k)
+                for r, u_k in zip(real_u.subfunctions, self.u_k_act.subfunctions)
+            ]
+            sweep_vs_real_H1 = _h1_semi_of_fn(e_nodes_real[-1])
+            sweep_vs_real_timeL2 = _time_L2(e_nodes_real)
         else:
             sweep_vs_real_err = None
             sweep_vs_real_comp = None
+            sweep_vs_real_H1 = None
+            sweep_vs_real_timeL2 = None
 
-        # Collocation errors vs real
+        # Collocation vs real (como antes)
         if use_collocation and use_exact and real_u is not None:
             coll_vs_real_err = errornorm(
                 self.u_collocation.subfunctions[-1],
@@ -333,6 +368,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             "sweep_vs_real_compound_norm": sweep_vs_real_comp,
             "collocation_vs_real_errornorm": coll_vs_real_err,
             "collocation_vs_real_compound_norm": coll_vs_real_comp,
+            "sweep_vs_collocation_H1seminorm": sweep_vs_coll_H1,
+            "sweep_vs_real_H1seminorm": sweep_vs_real_H1,
+            "sweep_vs_collocation_timeL2": sweep_vs_coll_timeL2,
+            "sweep_vs_real_timeL2": sweep_vs_real_timeL2,
         }
 
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
@@ -406,13 +445,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         for p, f_i in enumerate(f):
             for m in range(self.M):
                 idx = p + m * self.lenV
-                # As in my notes, each test function is independemt from the rest
                 u_m = self.u_k_act.subfunctions[idx]
-                # We extract V_local, as it is a copy
-                V_local = u_m.function_space()
-                v_m = TestFunction(V_local)
-                # v_m = TestFunction(self.W)
-
+                v_m = TestFunction(u_m.function_space())
                 #  assemble the part with u^{k+1}. We have to be very carefull as
                 # v_m will be included in the function f.
                 left = (
@@ -443,8 +477,15 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                 self.R_sweep.append(R_sweep)
 
+                # Rebuild BCs on the exact trial space of this node/component
+                u_space = u_m.function_space()
+                # bcs_local = tuple(
+                #     bc.reconstruct(V=u_space) for bc in self.bcs_V_2.get(idx, [])
+                # )
+                bcs_local = self.bcs_V
+
                 # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
-                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=self.bcs_V)
+                problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=bcs_local)
 
                 # Add some parameters for analysis.
                 self._sweep_meta.append(
@@ -716,6 +757,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                 while t < T:
 
+                    # Contraction metrics initialization
+                    delta_prev = None
+                    rho_seq = []
+                    delta_seq = []
+
                     # Solve the full collocation solver
                     if analysis:
                         for u in self.u_0_collocation.subfunctions:
@@ -736,6 +782,24 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                 s.solve()
 
                         if analysis:
+                            try:
+                                du = Function(
+                                    self.u_k_act.subfunctions[-1].function_space()
+                                )
+                                du.assign(self.u_k_act.subfunctions[-1])
+                                du -= self.u_k_prev.subfunctions[-1]
+                                delta = float(norm(du, norm_type="L2"))
+                                delta_seq.append(delta)
+
+                                eps = 1e-14
+                                if delta_prev is not None and delta_prev > eps:
+                                    rho_seq.append(float(delta / delta_prev))
+
+                                delta_prev = delta
+
+                            except Exception:
+                                pass
+
                             _update_exact_field(t) if use_exact else None
                             analysis_metrics = self._compute_analysis_metrics(
                                 real_u if use_exact else None,
@@ -753,6 +817,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                 analysis_metrics["collocation_vs_real_errornorm"],
                                 analysis_metrics["collocation_vs_real_compound_norm"],
                             ]
+
+                            convergence_results[f"{step},{t},contraction"] = {
+                                "delta_last": (
+                                    float(delta_prev)
+                                    if delta_prev is not None
+                                    else None
+                                ),
+                                "rho_seq": rho_seq[:],
+                                "delta_seq": delta_seq[:],
+                            }
 
                             timings = []
                             for row in self._timings_buffer:
@@ -884,7 +958,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
                             f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
                         )
-
                 # --- Guardado diádico en VTK ---
                 if (step % SAVE_STRIDE) == 0:
                     _maybe_save_vtk(vtk, vtk_coll, vtk_exact, t)

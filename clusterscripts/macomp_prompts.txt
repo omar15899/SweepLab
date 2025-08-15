@@ -61,7 +61,7 @@ qsub -q parallel64 \
 # JOB A (N = 8,16,32,64)
 qsub -q parallel64 \
   -N sdc_mesh_pool_A \
-  -l select=1:ncpus=1,mem=128gb \
+  -l select=1:ncpus=1,mem=128gb,walltime=300:00:00 \
   -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_A.o \
   -m abe -M ok24@ic.ac.uk \
   -v SMOKE=0,NCELLS_LIST="8 16 32 64",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX MIN-SR-NS",IS_PAR_LIST="1 0",MAX_WORKERS=48,OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1 \
@@ -70,8 +70,79 @@ qsub -q parallel64 \
 # JOB B (N = 128,256,512)
 qsub -q parallel64 \
   -N sdc_mesh_pool_B \
-  -l select=1:ncpus=1,mem=128gb \
+  -l select=1:ncpus=1,mem=128gb,walltime=300:00:00 \
   -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_B.o \
   -m abe -M ok24@ic.ac.uk \
   -v SMOKE=0,NCELLS_LIST="128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX MIN-SR-NS",IS_PAR_LIST="1 0",MAX_WORKERS=48,OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1 \
   /home/ma/o/ok24/clusterscripts/heat_9_funciona.pbs
+
+
+
+
+
+
+
+
+qsub -q parallel64 \
+  -l nodes=1:ppn=1,mem=128gb,walltime=500:00:00 \
+  -N sdc_mesh_pool_A \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_A.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="8 16 32 64",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX MIN-SR-NS",IS_PAR_LIST="1 0",MAX_WORKERS=48 \
+  /home/ma/o/ok24/clusterscripts/heat_10_funciona.pbs
+
+
+qsub -q parallel64 \
+  -l nodes=1:ppn=1,mem=128gb,walltime=500:00:00 \
+  -N sdc_mesh_pool_B \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_B.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX MIN-SR-NS",IS_PAR_LIST="1 0",MAX_WORKERS=48 \
+  /home/ma/o/ok24/clusterscripts/heat_10_funciona.pbs
+
+
+
+
+
+
+
+
+
+
+
+
+  # 1) MIN-SR-FLEX  +  paralelo (is_par=1)
+qsub -q parallel64 \
+  -l nodes=1:ppn=1,mem=128gb,walltime=500:00:00 \
+  -N sdc_heat_FLEX_par \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_FLEX_par.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="8 16 32 64 128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX",IS_PAR_LIST="1",MAX_WORKERS=48 \
+  /home/ma/o/ok24/clusterscripts/heat_10_funciona.pbs
+
+# 2) MIN-SR-FLEX  +  secuencial/global (is_par=0)
+qsub -q parallel64 \
+  -l nodes=1:ppn=1,mem=128gb,walltime=500:00:00 \
+  -N sdc_heat_FLEX_seq \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_FLEX_seq.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="8 16 32 64 128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-FLEX",IS_PAR_LIST="0",MAX_WORKERS=48 \
+  /home/ma/o/ok24/clusterscripts/heat_10_funciona.pbs
+
+# 3) MIN-SR-NS  +  paralelo (is_par=1)
+qsub -q parallel64 \
+  -l nodes=1:ppn=1,mem=128gb,walltime=500:00:00 \
+  -N sdc_heat_NS_par \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_NS_par.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="8 16 32 64 128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-NS",IS_PAR_LIST="1",MAX_WORKERS=48 \
+  /home/ma/o/ok24/clusterscripts/heat_10_funciona.pbs
+
+# 4) MIN-SR-NS  +  secuencial/global (is_par=0)
+qsub -q parallel64 \
+  -l nodes=1:ppn=1,mem=128gb,walltime=500:00:00 \
+  -N sdc_heat_NS_seq \
+  -j oe -o /home/clustor2/ma/o/ok24/logs/sdc_heat_NS_seq.o \
+  -m abe -M ok24@ic.ac.uk \
+  -v SMOKE=0,NCELLS_LIST="8 16 32 64 128 256 512",DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5",M_LIST="1 2 3 4 5 6 7 8 9 10",DEGREE_LIST=1,PRECTYPE_LIST="MIN-SR-NS",IS_PAR_LIST="0",MAX_WORKERS=48 \
+  /home/ma/o/ok24/clusterscripts/heat_10_funciona.pbs
