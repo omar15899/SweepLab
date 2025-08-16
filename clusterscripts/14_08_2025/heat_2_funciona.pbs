@@ -1,0 +1,137 @@
+#!/bin/bash
+#PBS -N sdc_mesh
+#PBS -j oe
+#PBS -m a
+#PBS -M ok24@ic.ac.uk
+#PBS -l select=1:ncpus=1
+
+set -euo pipefail
+
+# --------- rutas base ----------
+USR="${USR:-ok24}"
+HOME_DIR="${HOME_DIR:-/home/ma/o/${USR}}"
+PY_SCRIPT="${PY_SCRIPT:-${HOME_DIR}/clusterscripts/sdc_heat_equation.py}"
+FINAL_ROOT="${FINAL_ROOT:-/home/clustor2/ma/o/${USR}/solver_results/heatfiles/mesh_runs}"
+LOGDIR="${LOGDIR:-${HOME_DIR}/logs}"
+
+# --------- activa Firedrake ----------
+if [ -f "/usr/local/firedrake/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source "/usr/local/firedrake/bin/activate"
+else
+  echo "[ERROR] Firedrake activate no encontrado: /usr/local/firedrake/bin/activate" >&2
+  exit 2
+fi
+
+mkdir -p "$FINAL_ROOT" "$LOGDIR"
+
+# --------- detecta scratch local ----------
+HNAME=$(hostname)
+NN="${HNAME#macomp}"
+SCRATCH="/scratchcomp${NN}"
+if [ ! -d "$SCRATCH" ] || [ ! -w "$SCRATCH" ]; then
+  SCRATCH="${TMPDIR:-/tmp}"
+fi
+RUNROOT="${SCRATCH%/}/sdc_${PBS_JOBID%%.*}"
+mkdir -p "$RUNROOT"
+
+# --------- HDF5 seguro en NFS (por si algo se cuela) ----------
+export HDF5_USE_FILE_LOCKING=FALSE
+export HDF5_DISABLE_FILE_LOCKING=1
+export HDF5_DISABLE_VERSION_CHECK=2
+export HDF5_DRIVER=sec2
+export PYTHONUNBUFFERED=1
+
+# --------- mallado interno ----------
+SMOKE="${SMOKE:-1}"      # 1 = smoke, 0 = grande
+TFINAL="1.0"
+if [ "$SMOKE" = "1" ]; then
+  NCELLS_LIST="8"
+  DT_LIST="5e-2"
+  M_LIST="6"
+  DEGREE_LIST="1"
+else
+  NCELLS_LIST="2 4 8 16 32 64 128 256 512"
+  DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5"
+  M_LIST="$(seq 1 10)"
+  DEGREE_LIST="1 2 3 4"
+fi
+
+# --------- helper: construye JSON robusto desde env ---------
+build_params_json () {
+  python3 - <<'PY'
+import json, os
+def fget(k,d): return float(os.environ.get(k,str(d)))
+def iget(k,d): return int(os.environ.get(k,str(d)))
+def bget(k,d):
+    v=os.environ.get(k,str(int(d)))
+    return str(v).lower() in ("1","true","yes","on")
+cfg = dict(
+  dt=fget("DT",5e-2),
+  n_cells=iget("NCELLS",8),
+  sweeps=iget("SWEEPS",iget("M",6)),
+  M=iget("M",6),
+  Tfinal=fget("TFINAL",0.1),
+  is_parallel=bget("IS_PAR",True),
+  prectype=os.environ.get("PREC","MIN-SR-FLEX"),
+  degree=iget("DEGREE",1),
+  analysis=bget("ANALYSIS",True),
+  mode=os.environ.get("MODE","checkpoint"),
+  folder_name=".",                 # no subcarpetas: ficheros largos en OUTDIR_LOCAL
+  path_name=os.environ["OUTDIR"]   # siempre scratch local
+)
+print(json.dumps(cfg))
+PY
+}
+
+# --------- bucle de ejecucion ----------
+IS_PAR="1"
+PREC="MIN-SR-FLEX"
+MODE="checkpoint"
+ANALYSIS="1"
+
+i=0
+for DEGREE in $DEGREE_LIST; do
+  for NCELLS in $NCELLS_LIST; do
+    for DT in $DT_LIST; do
+      for M in $M_LIST; do
+        SWEEPS="$M"
+        i=$((i+1))
+
+        OUTDIR_LOCAL="${RUNROOT}/run_${i}"
+        mkdir -p "$OUTDIR_LOCAL"
+
+        # caches locales (rapido y aislado)
+        export PYOP2_CACHE_DIR="${OUTDIR_LOCAL}/.cache/pyop2"
+        export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="${OUTDIR_LOCAL}/.cache/firedrake/tsfc"
+        mkdir -p "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR"
+
+        # variables hacia Python
+        export OUTDIR="$OUTDIR_LOCAL"
+        export DT NCELLS M SWEEPS TFINAL IS_PAR PREC DEGREE ANALYSIS MODE
+        export SDC_OUTPUT_DIR="$OUTDIR_LOCAL"
+        export SDC_PARAMS_JSON="$(build_params_json)"
+
+        echo "[INFO] Host=$(hostname) JobID=${PBS_JOBID:-?} SMOKE=${SMOKE}  OUTDIR_LOCAL=$OUTDIR_LOCAL"
+        echo "[INFO] Params: dt=$DT  n=$NCELLS  M=$M  sweeps=$SWEEPS  T=$TFINAL  deg=$DEGREE  is_par=$IS_PAR  prec=$PREC"
+
+        # ejecutar
+        python3 -u "$PY_SCRIPT"
+
+        # copiar solo los 3 artefactos con nombre largo al destino final
+        shopt -s nullglob
+        mkdir -p "$FINAL_ROOT"
+        for f in "$OUTDIR_LOCAL"/*.h5 "$OUTDIR_LOCAL"/*_convergence_results.json "$OUTDIR_LOCAL"/*_log.txt; do
+          cp -f -- "$f" "$FINAL_ROOT"/
+        done
+        shopt -u nullglob
+
+        # limpieza local para ahorrar scratch
+        rm -rf "$OUTDIR_LOCAL" || true
+      done
+    done
+  done
+done
+
+echo "[INFO] Terminado. Artefactos en: $FINAL_ROOT"
+ls -lh "$FINAL_ROOT" | sed -n '1,200p' || true

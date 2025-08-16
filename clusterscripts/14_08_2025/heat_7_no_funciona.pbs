@@ -1,17 +1,17 @@
 #!/bin/bash
 #PBS -N sdc_mesh_pool
-#PBS -q medium
+#PBS -q parallel6
 #PBS -j oe
 #PBS -m abe
 #PBS -M ok24@ic.ac.uk
-# Pide 6 cores en medium (máx 8) y 7GB (máx 8GB)
-#PBS -l nodes=1:ppn=6,mem=7gb,walltime=01:00:00
+# OJO: en parallel6 pide 1 CPU; tú paralelizas dentro del nodo
+#PBS -l select=1:ncpus=1,mem=7gb,walltime=01:00:00
 #PBS -V
 
 set -euo pipefail
 umask 077
 
-# ---- entorno numérico (evita conflictos NumPy/BLAS) ----
+# ---- entorno numérico (evita conflictos NumPy) ----
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -23,6 +23,8 @@ unset PYTHONPATH || true
 USR="${USR:-ok24}"
 HOME_DIR="/home/ma/o/${USR}"
 PY_SCRIPT="${PY_SCRIPT:-${HOME_DIR}/clusterscripts/sdc_heat_equation.py}"
+
+# destino final SIEMPRE en clustor2
 FINAL_ROOT="${FINAL_ROOT:-/home/clustor2/ma/o/${USR}/solver_results/heatfiles/mesh_runs}"
 LOGDIR="${LOGDIR:-/home/clustor2/ma/o/${USR}/logs}"
 mkdir -p "$FINAL_ROOT" "$LOGDIR"
@@ -31,10 +33,13 @@ mkdir -p "$FINAL_ROOT" "$LOGDIR"
 # shellcheck disable=SC1091
 source /usr/local/firedrake/bin/activate
 
-# Preflight visible en el .o
+# Preflight claro (si peta, lo verás en el .o de PBS)
 python3 - <<'PY'
 import sys, numpy, petsc4py; import firedrake
-print("OK env:", "py",sys.version.split()[0], "np",numpy.__version__, "petsc4py",petsc4py.__version__)
+print("OK env:",
+      "py",sys.version.split()[0],
+      "np",numpy.__version__,
+      "petsc4py",petsc4py.__version__)
 PY
 
 # ---------- scratch del nodo ----------
@@ -57,27 +62,19 @@ export PYTHONUNBUFFERED=1
 # ---------- parámetros ----------
 SMOKE="${SMOKE:-1}"
 TFINAL="${TFINAL:-1.0}"
-
-# Listas base
 if [ "$SMOKE" = "1" ]; then
   NCELLS_LIST="${NCELLS_LIST:-8}"
+  DT_LIST="${DT_LIST:-5e-1}"      # ← por tu petición
+  M_LIST="${M_LIST:-6}"
+  DEGREE_LIST="${DEGREE_LIST:-1}"
+else
+  NCELLS_LIST="${NCELLS_LIST:-8 16 32 64}"
   DT_LIST="${DT_LIST:-5e-1}"
   M_LIST="${M_LIST:-6}"
-  # Para replicar las 16 variantes también en smoke:
-  DEGREE_LIST="${DEGREE_LIST:-1 2 3 4}"
-else
-  NCELLS_LIST="${NCELLS_LIST:-2 4 8 16 32 64 128 256 512}"
-  DT_LIST="${DT_LIST:-1e-1 1e-2 1e-3 1e-4 1e-5}"
-  M_LIST="${M_LIST:-1 2 3 4 5 6 7 8 9 10}"
-  DEGREE_LIST="${DEGREE_LIST:-1 2 3 4}"
+  DEGREE_LIST="${DEGREE_LIST:-1}"
 fi
 
-# Variantes extra como en el otro código:
-PRECTYPE_LIST="${PRECTYPE_LIST:-MIN-SR-FLEX MIN-SR-NS}"
-# 1=True (paralelo por nodos SDC), 0=False (solver global)
-IS_PAR_LIST="${IS_PAR_LIST:-1 0}"
-
-# --- helper: JSON apuntando SIEMPRE al scratch local ---
+# --- helper: JSON que apunta SIEMPRE al scratch local ---
 build_params_json () {
   python3 - <<'PY'
 import json, os
@@ -96,27 +93,20 @@ cfg = dict(
   analysis=bget("ANALYSIS",True),
   mode=os.environ.get("MODE","checkpoint"),
   folder_name=".",
-  path_name=os.environ["OUTDIR"]
+  path_name=os.environ["OUTDIR"]   # -> scratch local
 )
 print(json.dumps(cfg))
 PY
 }
 
-# ---------- pool (1 core por caso) ----------
-# Si no das MAX_WORKERS, usa los cores asignados por PBS:
-if [ -z "${MAX_WORKERS:-}" ]; then
-  if [ -f "${PBS_NODEFILE:-}" ]; then
-    MAX_WORKERS=$(wc -l < "$PBS_NODEFILE")
-  else
-    MAX_WORKERS=1
-  fi
-fi
-echo "[INFO] cola=medium  MAX_WORKERS=$MAX_WORKERS  host=$(hostname)"
+# ---------- pool de trabajos (1 core por caso) ----------
+# En parallel6 Torque cree que tienes 1 core; tú controlas el fan-out:
+MAX_WORKERS="${MAX_WORKERS:-6}"
 
 pids=(); running=0
 launch_case () {
-  local n="$1" dt="$2" m="$3" deg="$4" prec="$5" ispar="$6"
-  local out="${RUNROOT}/n${n}_dt${dt}_M${m}_deg${deg}_prec${prec}_par${ispar}"
+  local n="$1" dt="$2" m="$3" deg="$4"
+  local out="${RUNROOT}/n${n}_dt${dt}_M${m}_deg${deg}"
   mkdir -p "$out"
 
   export PYOP2_CACHE_DIR="${out}/.cache/pyop2"
@@ -125,15 +115,17 @@ launch_case () {
 
   export OUTDIR="$out"
   export DT="$dt" NCELLS="$n" M="$m" SWEEPS="$m" TFINAL="$TFINAL"
-  export IS_PAR="$ispar" PREC="$prec" DEGREE="$deg" ANALYSIS="${ANALYSIS:-1}" MODE="${MODE:-checkpoint}"
+  export IS_PAR="1" PREC="MIN-SR-FLEX" DEGREE="$deg" ANALYSIS="1" MODE="checkpoint"
   export SDC_OUTPUT_DIR="$out"
   export SDC_PARAMS_JSON="$(build_params_json)"
   export PETSC_OPTIONS="${PETSC_OPTIONS:-}-log_view :${out}/petsc.log"
 
-  echo "[RUN] n=$n dt=$dt M=$m deg=$deg prec=$prec is_par=$ispar -> $out"
+  echo "[RUN] n=$n dt=$dt M=$m deg=$deg -> $out"
   (
     set -e
+    # guarda log por caso
     python3 -u "$PY_SCRIPT" >"${out}/run.log" 2>&1
+
     shopt -s nullglob
     mkdir -p "$FINAL_ROOT"
     for f in "$out"/*.h5 "$out"/*_convergence_results.json "$out"/*_log.txt; do
@@ -147,29 +139,29 @@ launch_case () {
 }
 
 wait_one () {
-  if wait -n 2>/dev/null; then :; else
-    local pid="${pids[0]:-}"; [ -n "$pid" ] && wait "$pid" || true
-    pids=("${pids[@]:1}")
+  # no abortar aunque un hijo falle
+  if wait -n 2>/dev/null; then
+    :    # ok
+  else
+    local pid="${pids[0]:-}"
+    if [ -n "$pid" ]; then
+      wait "$pid" || true
+      pids=("${pids[@]:1}")
+    fi
   fi
   running=$((running-1))
 }
 
-# ---- barrido: TODAS las combinaciones (como el otro script) ----
-for PREC in $PRECTYPE_LIST; do
-  for IS_PAR in $IS_PAR_LIST; do
-    for DEGREE in $DEGREE_LIST; do
-      for NCELLS in $NCELLS_LIST; do
-        for DT in $DT_LIST; do
-          for M in $M_LIST; do
-            while [ "$running" -ge "$MAX_WORKERS" ]; do wait_one; done
-            launch_case "$NCELLS" "$DT" "$M" "$DEGREE" "$PREC" "$IS_PAR"
-          done
-        done
+for DEGREE in $DEGREE_LIST; do
+  for NCELLS in $NCELLS_LIST; do
+    for DT in $DT_LIST; do
+      for M in $M_LIST; do
+        while [ "$running" -ge "$MAX_WORKERS" ]; do wait_one; done
+        launch_case "$NCELLS" "$DT" "$M" "$DEGREE"
       done
     done
   done
 done
-
 while [ "$running" -gt 0 ]; do wait_one; done
 
 echo "[INFO] Terminado. Artefactos en: $FINAL_ROOT"

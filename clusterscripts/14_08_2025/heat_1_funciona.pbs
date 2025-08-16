@@ -1,0 +1,154 @@
+#!/bin/bash
+#PBS -N sdc_array
+#PBS -j oe
+#PBS -m a
+#PBS -M ok24@ic.ac.uk
+#PBS -l select=1:ncpus=1
+
+set -euo pipefail
+
+# ------- rutas base -------
+USR="${USR:-ok24}"
+HOME_DIR="${HOME_DIR:-/home/ma/o/${USR}}"
+PY_SCRIPT="${PY_SCRIPT:-${HOME_DIR}/clusterscripts/sdc_heat_equation.py}"
+PARAMS_FILE="${PARAMS_FILE:-${HOME_DIR}/clusterscripts/params.tsv}"
+
+# destino final (NFS/ZFS) en clustor2 (solo sincronizamos al final)
+FINAL_ROOT="${FINAL_ROOT:-/home/clustor2/ma/o/${USR}/solver_results/heatfiles/sweeps}"
+LOGDIR="${LOGDIR:-${HOME_DIR}/logs}"
+
+# ------- activar Firedrake -------
+if [ -f "/usr/local/firedrake/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source "/usr/local/firedrake/bin/activate"
+else
+  echo "[ERROR] Firedrake activate no encontrado en /usr/local/firedrake/bin/activate" >&2
+  exit 2
+fi
+
+# ------- detectar scratch local del nodo -------
+HNAME=$(hostname)
+NN="${HNAME#macomp}"
+SCRATCH="/scratchcomp${NN}"
+if [ ! -d "$SCRATCH" ] || [ ! -w "$SCRATCH" ]; then
+  SCRATCH="${TMPDIR:-/tmp}"
+fi
+
+mkdir -p "$LOGDIR" "$FINAL_ROOT"
+
+# ------- seleccionar línea de parámetros -------
+: "${PBS_ARRAYID:?PBS_ARRAYID requerido (usa -t)}"
+if [ ! -f "$PARAMS_FILE" ]; then
+  echo "[ERROR] No existe ${PARAMS_FILE}" >&2
+  exit 3
+fi
+
+# Formato TSV esperado (sin encabezado):
+# dt  n_cells  M  sweeps  Tfinal  is_par  prectype  degree  analysis  mode  tag
+read_param() {
+  awk -v i="${PBS_ARRAYID}" 'NR==i{print; exit}' "$PARAMS_FILE"
+}
+LINE=$(read_param || true)
+if [ -z "${LINE:-}" ]; then
+  echo "[ERROR] PBS_ARRAYID=${PBS_ARRAYID} no tiene linea en ${PARAMS_FILE}" >&2
+  exit 4
+fi
+
+IFS=$'\t' read -r DT NCELLS M SWEEPS TFINAL IS_PAR PREC DEGREE ANALYSIS MODE TAG <<< "$LINE"
+
+# ------- directorio local de trabajo (único por tarea) -------
+RUN_ID="${TAG:-run_${PBS_ARRAYID}}"
+OUTDIR_LOCAL="${SCRATCH%/}/sdc_${PBS_JOBID%%.*}_${RUN_ID}"
+mkdir -p "$OUTDIR_LOCAL"
+
+# caches locales SIEMPRE en scratch
+export PYOP2_CACHE_DIR="${OUTDIR_LOCAL}/.cache/pyop2"
+export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="${OUTDIR_LOCAL}/.cache/firedrake/tsfc"
+mkdir -p "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR"
+
+# PETSc log en scratch (no en NFS) y stdout sin búfer
+export PETSC_OPTIONS="${PETSC_OPTIONS:-}-log_view :${OUTDIR_LOCAL}/petsc.log"
+export PYTHONUNBUFFERED=1
+
+# -------- construir JSON de config de forma robusta --------
+export OUTDIR="$OUTDIR_LOCAL"
+export SDC_OUTPUT_DIR="$OUTDIR"
+export SDC_PARAMS_JSON="$(
+  python3 - <<'PY'
+import json, os
+def fget(k, d): return float(os.environ.get(k, str(d)))
+def iget(k, d): return int(os.environ.get(k, str(d)))
+def bget(k, d):
+    v = os.environ.get(k, str(int(d)))
+    return str(v).lower() in ("1","true","yes","on")
+cfg = dict(
+  dt=fget("DT", 5e-2),
+  n_cells=iget("NCELLS", 8),
+  sweeps=iget("SWEEPS", iget("M",6)),
+  M=iget("M", 6),
+  Tfinal=fget("TFINAL", 0.1),
+  is_parallel=bget("IS_PAR", True),
+  prectype=os.environ.get("PREC","MIN-SR-FLEX"),
+  degree=iget("DEGREE",1),
+  analysis=bget("ANALYSIS", True),
+  mode=os.environ.get("MODE","checkpoint"),
+  folder_name=".",
+  path_name=os.environ.get("OUTDIR","/tmp"),
+)
+print(json.dumps(cfg))
+PY
+)"
+
+# ------- para reproducibilidad: vuelca config y versión de entorno -------
+python3 - <<'PY' > "${OUTDIR_LOCAL}/config.json"
+import json, os, sys, subprocess
+from datetime import datetime
+cfg = json.loads(os.environ["SDC_PARAMS_JSON"])
+meta = {
+  "when": datetime.utcnow().isoformat()+"Z",
+  "host": os.uname().nodename,
+  "pbs_jobid": os.environ.get("PBS_JOBID"),
+  "array_id": os.environ.get("PBS_ARRAYID"),
+  "user": os.environ.get("USER"),
+  "python": sys.version,
+  "firedrake_prefix": os.environ.get("VIRTUAL_ENV"),
+  "petsc_options": os.environ.get("PETSC_OPTIONS"),
+  "script": os.environ.get("PY_SCRIPT"),
+  "env": {k:v for k,v in os.environ.items() if k in ("HDF5_USE_FILE_LOCKING","HDF5_DRIVER")},
+  "params": cfg,
+}
+print(json.dumps(meta, indent=2))
+PY
+
+# ------- HDF5 modos seguros en NFS (por si algo se filtra) -------
+export HDF5_USE_FILE_LOCKING=FALSE
+export HDF5_DISABLE_FILE_LOCKING=1
+export HDF5_DISABLE_VERSION_CHECK=2
+export HDF5_DRIVER=sec2
+
+# ------- ejecutar -------
+echo "[INFO] Host=$(hostname) Queue=${PBS_QUEUE:-?} JobID=${PBS_JOBID:-?} ArrayID=${PBS_ARRAYID}"
+echo "[INFO] OUTDIR_LOCAL=${OUTDIR_LOCAL}"
+echo "[INFO] Params: DT=${DT} NCELLS=${NCELLS} M=${M} SWEEPS=${SWEEPS} T=${TFINAL} IS_PAR=${IS_PAR} PREC=${PREC} DEGREE=${DEGREE} ANALYSIS=${ANALYSIS} MODE=${MODE} TAG=${RUN_ID}"
+
+python3 -u "$PY_SCRIPT"
+
+# ------- normalizar artefactos -------
+cd "$OUTDIR_LOCAL"
+latest_h5=$(ls -t *.h5 2>/dev/null | head -n1 || true)
+latest_json=$(ls -t *_convergence_results.json 2>/dev/null | head -n1 || true)
+latest_log=$(ls -t *_log.txt 2>/dev/null | head -n1 || true)
+[ -n "${latest_h5:-}" ]   && cp -f -- "$latest_h5"  solution.h5
+[ -n "${latest_json:-}" ] && cp -f -- "$latest_json" results.json
+[ -n "${latest_log:-}" ]  && cp -f -- "$latest_log" log.txt
+
+# añade también el log de PETSc local si existe
+[ -f petsc.log ] && cp -f petsc.log log_petsc.txt
+
+# ------- sincronizar al destino final en clustor2 (uno por run) -------
+DEST="${FINAL_ROOT%/}/${RUN_ID}"
+mkdir -p "$DEST"
+rsync -a --partial --inplace "$OUTDIR_LOCAL"/ "$DEST"/
+
+echo "[INFO] Final artifacts in: $DEST"
+ls -lh "$DEST" || true

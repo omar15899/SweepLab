@@ -1072,6 +1072,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         # Contraction metrics (para delta_seq a posteriori)
                         delta_prev = None
                         rho_seq = []
+                        delta_seq = []
                         eps_delta = 1e-14
 
                         # Solve the full collocation solver
@@ -1079,7 +1080,18 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                             for u in self.u_0_collocation.subfunctions:
                                 u.assign(self.u_collocation.subfunctions[-1])
 
+                            t0 = time.perf_counter()
                             self.collocation_solver.solve()
+                            collocation_wall_time = time.perf_counter() - t0
+
+                            convergence_results[
+                                f"{step},{t},full_collocation_timing"
+                            ] = [
+                                {
+                                    "solver_index": "full_collocation",
+                                    "wall_time": collocation_wall_time,
+                                }
+                            ]
 
                         # Apply the sweep
                         for k in range(1, sweeps + 1):
@@ -1102,6 +1114,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                     du.assign(self.u_k_act.subfunctions[-1])
                                     du -= self.u_k_prev.subfunctions[-1]
                                     delta = float(norm(du, norm_type="L2"))
+                                    delta_seq.append(delta)
 
                                     if (delta_prev is not None) and (
                                         delta_prev > eps_delta
@@ -1139,7 +1152,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                         if delta_prev is not None
                                         else None
                                     ),
-                                    "rho_seq": rho_seq[:],  # copia snapshot
+                                    "rho_seq": rho_seq[:],
+                                    "delta_seq": delta_seq[:],
                                 }
 
                                 timings = []
@@ -1222,7 +1236,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     print(f"step {step}  t={t:.4e}")
 
                     if analysis:
+                        t0 = time.perf_counter()
                         self.collocation_solver.solve()
+                        collocation_wall_time = time.perf_counter() - t0
+
+                        # Guardar el tiempo en el buffer de timings
+                        self._timings_buffer.append(
+                            {
+                                "solver_index": "full_collocation",
+                                "wall_time": collocation_wall_time,
+                            }
+                        )
                         for u in self.u_0_collocation.subfunctions:
                             u.assign(self.u_collocation.subfunctions[-1])
 
@@ -1459,8 +1483,8 @@ def solve_heat_pde(
         is_parallel=is_parallel,
         solver_parameters={
             "snes_type": "newtonls",
-            "snes_rtol": 1e-14,
-            "snes_atol": 1e-16,
+            # "snes_rtol": 1e-14,
+            # "snes_atol": 1e-16,
             "ksp_type": "preonly",
             "pc_type": "lu",
         },

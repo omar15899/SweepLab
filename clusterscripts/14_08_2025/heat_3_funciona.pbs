@@ -1,0 +1,196 @@
+#!/bin/bash
+#PBS -N sdc_mesh_pool
+#PBS -j oe
+#PBS -o /home/ma/o/ok24/logs/sdc_mesh_pool.o$PBS_JOBID
+#PBS -e /home/ma/o/ok24/logs/sdc_mesh_pool.e$PBS_JOBID
+# notificaciones del propio PBS
+#PBS -m abe
+#PBS -M ok24@ic.ac.uk
+# Recurso por defecto (SMOKE: 4 cores, 4GB totales)
+# Cambia ncpus en qsub para escalar el paralelismo de combinaciones
+#PBS -q medium
+#PBS -l select=1:ncpus=4,mem=4gb
+#PBS -V
+
+set -euo pipefail
+
+# ---------- rutas ----------
+USR="ok24"
+HOME_DIR="/home/ma/o/${USR}"
+PY_SCRIPT="${HOME_DIR}/clusterscripts/sdc_heat_equation.py"
+FINAL_ROOT="${HOME_DIR}/solver_results/heatfiles/mesh_runs"
+LOGDIR="${HOME_DIR}/logs"
+MAIL_TO="${MAIL_TO:-ok24@ic.ac.uk}"
+
+mkdir -p "$FINAL_ROOT" "$LOGDIR"
+
+# ---------- Firedrake ----------
+# shellcheck disable=SC1091
+source /usr/local/firedrake/bin/activate
+
+# ---------- scratch local ----------
+HNAME=$(hostname)
+NN="${HNAME#macomp}"
+SCRATCH="/scratchcomp${NN}"
+[ -d "$SCRATCH" ] && [ -w "$SCRATCH" ] || SCRATCH="${TMPDIR:-/tmp}"
+RUNROOT="${SCRATCH%/}/sdc_${PBS_JOBID%%.*}"
+mkdir -p "$RUNROOT"
+
+# ---------- HDF5/PETSc seguros ----------
+export HDF5_USE_FILE_LOCKING=FALSE
+export HDF5_DISABLE_FILE_LOCKING=1
+export HDF5_DISABLE_VERSION_CHECK=2
+export HDF5_DRIVER=sec2
+export PYTHONUNBUFFERED=1
+
+# ---------- utilidades ----------
+send_mail() {
+  local subject="$1"; shift
+  local body="$*"
+  if command -v mail >/dev/null 2>&1; then
+    printf "%s\n" "$body" | mail -s "$subject" "$MAIL_TO" || true
+  elif command -v mailx >/dev/null 2>&1; then
+    printf "%s\n" "$body" | mailx -s "$subject" "$MAIL_TO" || true
+  else
+    {
+      echo "To: $MAIL_TO"
+      echo "Subject: $subject"
+      echo
+      echo "$body"
+    } >> "${LOGDIR}/mailqueue_${PBS_JOBID}.txt"
+  fi
+}
+
+build_params_json () {
+  python3 - <<'PY'
+import json, os
+def fget(k,d): return float(os.environ.get(k,str(d)))
+def iget(k,d): return int(os.environ.get(k,str(d)))
+def bget(k,d):
+    v=os.environ.get(k,str(int(d)))
+    return str(v).lower() in ("1","true","yes","on")
+cfg = dict(
+  dt=fget("DT",5e-2),
+  n_cells=iget("NCELLS",8),
+  sweeps=iget("SWEEPS",iget("M",6)),
+  M=iget("M",6),
+  Tfinal=fget("TFINAL",1.0),
+  is_parallel=bget("IS_PAR",True),
+  prectype=os.environ.get("PREC","MIN-SR-FLEX"),
+  degree=iget("DEGREE",1),
+  analysis=bget("ANALYSIS",True),
+  mode=os.environ.get("MODE","checkpoint"),
+  folder_name=".",                 # ficheros largos en OUTDIR_LOCAL plano
+  path_name=os.environ["OUTDIR"]   # scratch local
+)
+print(json.dumps(cfg))
+PY
+}
+
+# ---------- mallado (sin MPI: 1 core por combinación) ----------
+SMOKE="${SMOKE:-1}"   # 1=smoke, 0=barrido grande
+TFINAL="1.0"
+if [ "$SMOKE" = "1" ]; then
+  NCELLS_LIST="8"
+  DT_LIST="5e-1"
+  M_LIST="1 2"
+  DEGREE_LIST="1 2"
+else
+  NCELLS_LIST="2 4 8 16 32 64 128 256 512"
+  DT_LIST="1e-1 1e-2 1e-3 1e-4 1e-5"
+  M_LIST="$(seq 1 10)"
+  DEGREE_LIST="1 2 3 4"
+fi
+
+# ---------- paralelismo a nivel de combinaciones ----------
+# nº de workers = nº de cores asignados, salvo override vía MAX_WORKERS
+if [ -f "${PBS_NODEFILE:-}" ]; then
+  ASSIGNED_CORES=$(wc -l < "$PBS_NODEFILE")
+else
+  ASSIGNED_CORES=1
+fi
+MAX_WORKERS="${MAX_WORKERS:-$ASSIGNED_CORES}"
+echo "[INFO] Host=$(hostname) JobID=${PBS_JOBID:-?} cores_asignados=$ASSIGNED_CORES max_workers=$MAX_WORKERS"
+
+pids=()
+running=0
+
+launch_case () {
+  local n="$1" dt="$2" m="$3" deg="$4"
+  local out="${RUNROOT}/n${n}_dt${dt}_M${m}_deg${deg}"
+  mkdir -p "$out"
+
+  # caches locales por caso
+  export PYOP2_CACHE_DIR="${out}/.cache/pyop2"
+  export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="${out}/.cache/firedrake/tsfc"
+  mkdir -p "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR"
+
+  # variables hacia Python (sin MPI)
+  export OUTDIR="$out"
+  export DT="$dt" NCELLS="$n" M="$m" SWEEPS="$m" TFINAL="$TFINAL"
+  export IS_PAR="1" PREC="MIN-SR-FLEX" DEGREE="$deg" ANALYSIS="1" MODE="checkpoint"
+  export SDC_OUTPUT_DIR="$out"
+  export SDC_PARAMS_JSON="$(build_params_json)"
+  export PETSC_OPTIONS="${PETSC_OPTIONS:-}-log_view :${out}/petsc.log"
+
+  echo "[RUN] n=$n dt=$dt M=$m deg=$deg  -> $out"
+
+  # ejecución en 1 core (sin mpiexec) -> en background
+  (
+    set -e
+    python3 -u "$PY_SCRIPT"
+    # copiar SOLO artefactos largos al destino final
+    shopt -s nullglob
+    for f in "$out"/*.h5 "$out"/*_convergence_results.json "$out"/*_log.txt; do
+      cp -f -- "$f" "$FINAL_ROOT"/
+    done
+    shopt -u nullglob
+    # mail por combinación
+    local L
+    L=($(ls -1 "$out"/*.h5 "$out"/*_convergence_results.json "$out"/*_log.txt 2>/dev/null || true))
+    local sizes
+    sizes=$(ls -lh "${L[@]}" 2>/dev/null | awk '{print $9"  "$5}' || true)
+    send_mail "[SDC OK] n=$n dt=$dt M=$m deg=$deg (Job $PBS_JOBID)" \
+      "Artefactos en: ${FINAL_ROOT}
+$sizes"
+    # limpia scratch del caso
+    rm -rf "$out" || true
+  ) &
+  pids+=("$!")
+  running=$((running+1))
+}
+
+wait_one () {
+  # espera a que termine cualquiera; fallback si bash no tiene wait -n
+  if wait -n 2>/dev/null; then
+    :
+  else
+    local pid="${pids[0]}"
+    [ -n "${pid:-}" ] && wait "$pid" || true
+    pids=("${pids[@]:1}")
+  fi
+  running=$((running-1))
+}
+
+# lanza el mallado con un pool de MAX_WORKERS
+for DEGREE in $DEGREE_LIST; do
+  for NCELLS in $NCELLS_LIST; do
+    for DT in $DT_LIST; do
+      for M in $M_LIST; do
+        # si estamos a tope, espera a que libere un worker
+        while [ "$running" -ge "$MAX_WORKERS" ]; do
+          wait_one
+        done
+        launch_case "$NCELLS" "$DT" "$M" "$DEGREE"
+      done
+    done
+  done
+done
+
+# espera al resto
+while [ "$running" -gt 0 ]; do
+  wait_one
+done
+
+echo "[INFO] Terminado. Artefactos en: $FINAL_ROOT"
+ls -lh "$FINAL_ROOT" | sed -n '1,200p' || true

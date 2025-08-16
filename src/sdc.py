@@ -767,7 +767,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         for u in self.u_0_collocation.subfunctions:
                             u.assign(self.u_collocation.subfunctions[-1])
 
+                        t0 = time.perf_counter()
                         self.collocation_solver.solve()
+                        collocation_wall_time = time.perf_counter() - t0
+
+                        convergence_results[f"{step},{t},full_collocation_timing"] = [
+                            {
+                                "solver_index": "full_collocation",
+                                "wall_time": collocation_wall_time,
+                            }
+                        ]
 
                     # Apply the sweep
                     for k in range(1, sweeps + 1):
@@ -839,6 +848,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                     {},
                                 )
                                 timings.append({**meta, **row})
+
                             convergence_results[f"{step},{t},{k}_timings"] = timings
 
                             err_intra.append(
@@ -977,7 +987,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         ct.assign(t)
                 step += 1
 
-            # --- Forzar guardado final en T si no cayó en el stride ---
             if not wrote_T:
                 _maybe_save_vtk(vtk, vtk_coll, vtk_exact, T)
 

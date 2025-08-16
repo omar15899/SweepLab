@@ -78,8 +78,8 @@ def solve_heat_pde(
         is_parallel=is_parallel,
         solver_parameters={
             "snes_type": "newtonls",
-            "snes_rtol": 1e-14,
-            "snes_atol": 1e-16,
+            # "snes_rtol": 1e-14,
+            # "snes_atol": 1e-16,
             "ksp_type": "preonly",
             "pc_type": "lu",
         },
@@ -95,7 +95,7 @@ def solve_heat_pde(
     solver.solve(Tfinal, nsweeps, real_exp)
 
 
-N_CELLS = [8]
+N_CELLS = [128]
 DT_LIST = [1e-2]
 SWEEPS = [6]
 DEGREE = [1]
@@ -109,11 +109,11 @@ for n, dt, sw, deg in product(N_CELLS, DT_LIST, SWEEPS, DEGREE):
         nsweeps=sw,
         M=M,
         Tfinal=TFINAL,
-        is_parallel=True,
+        is_parallel=False,
         prectype="MIN-SR-FLEX",
         degree=deg,
         analysis=True,
-        mode="vtk",
+        mode="checkpoint",
         folder_name=None,
         path_name=None,
     )
