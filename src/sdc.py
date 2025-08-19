@@ -415,6 +415,68 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             },
         )
 
+    @PETSc.Log.EventDecorator("_setup_parallel_sweep_solver_V")
+    def _setup_parallel_sweep_solver_V(self):
+        """
+        Un solver por nodo m, pero cada solver vive en el espacio mixto completo V.
+        Pasamos self.bcs_V sin tocarlas.
+        """
+        deltat = self.deltat
+        tau = self.tau
+        t0 = self.t_0_subinterval
+        f_list = self.PDEs.f
+        Q = self.Q
+        Q_D = self.Q_D
+
+        self.sweep_solvers = []
+        self.R_sweep = []
+        self._sweep_meta.clear()
+
+        for m in range(self.M):
+            u_m = self.Uk_act[m]  # incógnita en V
+            vV = TestFunction(self.V)  # test en V
+
+            u_split = split(u_m)
+            v_split = split(vV)
+            u0_split = split(self.U0[m])
+
+            Rm_int = 0
+            t_m = t0 + tau[m] * deltat
+            u_prev_splits = [split(self.Uk_prev[j]) for j in range(self.M)]
+            for p, f_i in enumerate(f_list):
+                left_p = inner(u_split[p], v_split[p]) - deltat * self.scale * Q_D[
+                    m, m
+                ] * f_i(t_m, u_split[p], v_split[p])
+                right_p = inner(u0_split[p], v_split[p])
+                for j in range(self.M):
+                    t_j = t0 + tau[j] * deltat
+                    coeff = Q[m, j] - self.scale * Q_D[m, j]
+                    right_p += (
+                        deltat * coeff * f_i(t_j, u_prev_splits[j][p], v_split[p])
+                    )
+                Rm_int += left_p - right_p
+
+            Rm = Rm_int * dx
+            self.R_sweep.append(Rm)
+
+            # ¡BCs originales sobre V.sub(i)! — sin reconstrucciones locales
+            problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs_V)
+            solver_m = NonlinearVariationalSolver(
+                problem_m,
+                solver_parameters=self.solver_parameters
+                or {
+                    "snes_type": "newtonls",
+                    "snes_rtol": 1e-8,
+                    "ksp_type": "preonly",
+                    "pc_type": "lu",
+                },
+            )
+
+            self._sweep_meta.append(
+                {"solver_index": len(self.sweep_solvers), "node": m}
+            )
+            self.sweep_solvers.append(solver_m)
+
     @PETSc.Log.EventDecorator("_setup_paralell_sweep_solver")
     def _setup_paralell_sweep_solver(self):
         """
