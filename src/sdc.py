@@ -82,77 +82,101 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.V = self.PDEs.V
         self.lenV = len(self.V.subspaces) if self.PDEs._is_Mixed else 1
 
-        # In order to match spatial and temporal discretisation,
-        # we create a MixedFunctionSpace in order to have a bag
-        # of individual function space objects, so when we create
-        # a function in this space we are creating M functions, one
-        # for each node M defined
-        self.W = MixedFunctionSpace([self.V] * self.M)
-        # Also we could use the * operator to create the MixedFunctionSpace,
-        # self.W is a flat list of subspaces, theres no nested subspaces
-        # except for the vectorfunctionspaces. self.V is flattened before
-        # being instantiated in PDESystem.
-
         # Instantiate boundary conditions and test functions:
         self.bcs_V = self.PDEs.boundary_conditions
-        self.bcs_W, self.bcs_V_2 = self._define_node_time_boundary_setup()
+        self.uses_W = (not self.is_parallel) or self.analysis
+        if self.uses_W:
+            # In order to match spatial and temporal discretisation,
+            # we create a MixedFunctionSpace in order to have a bag
+            # of individual function space objects, so when we create
+            # a function in this space we are creating M functions, one
+            # for each node M defined
+            self.W = MixedFunctionSpace([self.V] * self.M)
+            # Also we could use the * operator to create the MixedFunctionSpace,
+            # self.W is a flat list of subspaces, theres no nested subspaces
+            # except for the vectorfunctionspaces. self.V is flattened before
+            # being instantiated in PDESystem.
+            self.bcs_W, self.bcs_V_2 = self._define_node_time_boundary_setup()
+            # Define the residuals
+            self.R_sweep = []
+            self.R_coll = 0
 
-        # Define the residuals
-        self.R_sweep = []
-        self.R_coll = 0
+            # Define the actual functions, if we want to retrieve
+            # the list of functions for each coordinate use split.
+            self.u_0 = Function(self.W, name="u_0")
+            self.u_k_prev = Function(self.W, name="u_k")
+            self.u_k_act = Function(self.W, name="u_{k+1}")
 
-        # Define the actual functions, if we want to retrieve
-        # the list of functions for each coordinate use split.
-        self.u_0 = Function(self.W, name="u_0")
-        self.u_k_prev = Function(self.W, name="u_k")
-        self.u_k_act = Function(self.W, name="u_{k+1}")
-
-        # In order to compare the collocation problem with the solutions,
-        # we need to create
-        self.u_0_collocation = Function(self.W, name="u_0 collocation")
-        self.u_collocation = Function(self.W, name="u_collocation")
-
-        # Debemos pensar que lo que se define en el espacio finito es la base
-        # del espacio finito ghlobal, nada más, justamente lo que hace Function
-        # es definir las coordenadas de la función con respecto a esa base (y
-        # bueno más cosas). Para más información mirar mi librería de finite
-        # elements.
+            if self.analysis:
+                # In order to compare the collocation problem with the solutions,
+                # we need to create
+                self.u_0_collocation = Function(self.W, name="u_0 collocation")
+                self.u_collocation = Function(self.W, name="u_collocation")
+                self._init_collocation_from_u0()
+            else:
+                self.u_0_collocation = None
+                self.u_collocation = None
+        else:
+            self.W = None
+            self.bcs_W, self.bcs_V_2 = (), {}
+            self.R_sweep = []
+            self.R_coll = 0
+            self.u_0 = None
+            self.u_k_prev = None
+            self.u_k_act = None
+            self.u_0_collocation = None
+            self.u_collocation = None
+            # Debemos pensar que lo que se define en el espacio finito es la base
+            # del espacio finito ghlobal, nada más, justamente lo que hace Function
+            # es definir las coordenadas de la función con respecto a esa base (y
+            # bueno más cosas). Para más información mirar mi librería de finite
+            # elements.
 
         # As all the functions are vectorial in the codomain due
         # to the nodal discretisation of the temporal axis
-        for i, (
-            subfunction_0,
-            subfunction_k_prev,
-            subfunction_k_act,
-            subfunction_0_collocation,
-            subfunction_collocation,
-        ) in enumerate(
-            zip(
-                self.u_0.subfunctions,
-                self.u_k_prev.subfunctions,
-                self.u_k_act.subfunctions,
-                self.u_0_collocation.subfunctions,
-                self.u_collocation.subfunctions,
-            ),
-            0,
-        ):
-            u0 = self.PDEs.u0.subfunctions[i % self.lenV]
-            subfunction_0.interpolate(u0)
-            subfunction_k_prev.interpolate(u0)
-            subfunction_k_act.interpolate(u0)
-            subfunction_0_collocation.interpolate(u0)
-            subfunction_collocation.interpolate(u0)
+        for m in range(self.M):
+            if self.PDEs._is_Mixed:
+                for p in range(self.lenV):
+                    self.U0[m].subfunctions[p].interpolate(self.PDEs.u0.subfunctions[p])
+                    self.Uk_prev[m].subfunctions[p].interpolate(
+                        self.PDEs.u0.subfunctions[p]
+                    )
+                    self.Uk_act[m].subfunctions[p].interpolate(
+                        self.PDEs.u0.subfunctions[p]
+                    )
+            else:
+                self.U0[m].interpolate(self.PDEs.u0)
+                self.Uk_prev[m].interpolate(self.PDEs.u0)
+                self.Uk_act[m].interpolate(self.PDEs.u0)
+        if self.uses_W:
+            self._sync_W_from_V()
 
         # Initial time and instantiate the solvers
         self.t_0_subinterval = Constant(0.0)
         self.scale = Constant(1.0)
-        (
-            self._setup_paralell_sweep_solver()
-            if is_parallel
-            else self._setup_global_sweep_solver()
-        )
 
-        self._setup_full_collocation_solver() if self.analysis else None
+        if not self.is_parallel:
+            # Global necesita W
+            assert self.uses_W, "Global solver requires W."
+            self._setup_global_sweep_solver()
+        else:
+            self._setup_parallel_sweep_solver_V()
+
+        if self.analysis:
+            # El solver de colocación se formula sobre W
+            if not self.uses_W:
+                # análisis necesita W para comparar con colocación
+                self.W = MixedFunctionSpace([self.V] * self.M)
+                self.u_0 = Function(self.W, name="u_0")
+                self.u_k_prev = Function(self.W, name="u_k")
+                self.u_k_act = Function(self.W, name="u_{k+1}")
+                self.u_0_collocation = Function(self.W, name="u_0 collocation")
+                self.u_collocation = Function(self.W, name="u_collocation")
+                self.bcs_W, self.bcs_V_2 = self._define_node_time_boundary_setup()
+                self._sync_W_from_V()
+                self._init_collocation_from_u0()
+                self.uses_W = True
+            self._setup_full_collocation_solver()
 
     def _define_node_time_boundary_setup(self):
         """
