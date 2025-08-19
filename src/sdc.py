@@ -178,6 +178,104 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 self.uses_W = True
             self._setup_full_collocation_solver()
 
+    def _init_collocation_from_u0(self):
+        if (
+            not self.analysis
+            or self.u_0_collocation is None
+            or self.u_collocation is None
+        ):
+            return
+        if self.PDEs._is_Mixed:
+            for i, (u0c, uc) in enumerate(
+                zip(self.u_0_collocation.subfunctions, self.u_collocation.subfunctions)
+            ):
+                base = self.PDEs.u0.subfunctions[i % self.lenV]
+                u0c.interpolate(base)
+                uc.interpolate(base)
+        else:
+            for u0c, uc in zip(
+                self.u_0_collocation.subfunctions, self.u_collocation.subfunctions
+            ):
+                u0c.interpolate(self.PDEs.u0)
+                uc.interpolate(self.PDEs.u0)
+
+    def _sync_W_from_V(self):
+        if getattr(self, "W", None) is None or any(
+            getattr(self, nm, None) is None for nm in ("u_k_act", "u_k_prev", "u_0")
+        ):
+            return
+        for m in range(self.M):
+            if self.PDEs._is_Mixed:
+                for p in range(self.lenV):
+                    idx = p + m * self.lenV
+                    self.u_k_act.subfunctions[idx].assign(
+                        self.Uk_act[m].subfunctions[p]
+                    )
+                    self.u_k_prev.subfunctions[idx].assign(
+                        self.Uk_prev[m].subfunctions[p]
+                    )
+                    self.u_0.subfunctions[idx].assign(self.U0[m].subfunctions[p])
+            else:
+                idx = m * self.lenV
+                self.u_k_act.subfunctions[idx].assign(self.Uk_act[m])
+                self.u_k_prev.subfunctions[idx].assign(self.Uk_prev[m])
+                self.u_0.subfunctions[idx].assign(self.U0[m])
+
+    def _sync_all_nodes_to_last(self):
+        # Caso paralelo con layout V: V es la verdad, y (solo si hace falta)
+        # reflejamos a W cuando haga falta para análisis.
+        if self.is_parallel:
+            last_V = self.Uk_act[-1]
+            for coll in (self.Uk_act, self.Uk_prev, self.U0):
+                for u in coll:
+                    u.assign(last_V)
+            # NO toques W aquí; ya sincronizas W<-V donde lo necesitas (antes de análisis)
+            return
+
+        # En global (y en paralelo layout W), W es la verdad.
+        last_W = self.u_k_act.subfunctions[-1]
+        for sub in (
+            *self.u_k_act.subfunctions,
+            *self.u_k_prev.subfunctions,
+            *self.u_0.subfunctions,
+        ):
+            sub.assign(last_W)
+
+    def _last_block_as_V(self, prev: bool = False) -> Function:
+        """
+        Devuelve el estado del último nodo temporal (m = M-1) como Function(self.V),
+        agregando todas las componentes del mixto.
+        """
+        if self.is_parallel:
+            return self.Uk_prev[-1] if prev else self.Uk_act[-1]
+
+        # Global: reconstruir desde W → V
+        out = Function(self.V)
+        src_vec = self.u_k_prev if prev else self.u_k_act
+        for p in range(self.lenV):
+            idx = p + (self.M - 1) * self.lenV
+            out.subfunctions[p].assign(src_vec.subfunctions[idx])
+        return out
+
+    def _get_last_state_view(self):
+        if self.is_parallel:
+            return self.Uk_act[-1]
+        # Global o paralelo con W
+        return self.u_k_act.subfunctions[-1]
+
+    def _total_residual_sweep_aggregated(self) -> float:
+        if not self.R_sweep:
+            return 0.0
+        if len(self.R_sweep) == 1:
+            vec = assemble(self.R_sweep[0]).riesz_representation()
+            return float(norm(vec, norm_type="L2"))
+        # Paralelo: suma de normas de cada residual
+        total = 0.0
+        for Rm in self.R_sweep:
+            vec = assemble(Rm).riesz_representation()
+            total += float(norm(vec, norm_type="L2"))
+        return total
+
     def _define_node_time_boundary_setup(self):
         """
         Need to be very awayre of how Firedrake flattens
@@ -441,10 +539,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("_setup_parallel_sweep_solver_V")
     def _setup_parallel_sweep_solver_V(self):
-        """
-        Un solver por nodo m, pero cada solver vive en el espacio mixto completo V.
-        Pasamos self.bcs_V sin tocarlas.
-        """
+        """ """
         deltat = self.deltat
         tau = self.tau
         t0 = self.t_0_subinterval
@@ -457,8 +552,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self._sweep_meta.clear()
 
         for m in range(self.M):
-            u_m = self.Uk_act[m]  # incógnita en V
-            vV = TestFunction(self.V)  # test en V
+            u_m = self.Uk_act[m]
+            vV = TestFunction(self.V)
 
             u_split = split(u_m)
             v_split = split(vV)
@@ -483,7 +578,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             Rm = Rm_int * dx
             self.R_sweep.append(Rm)
 
-            # ¡BCs originales sobre V.sub(i)! — sin reconstrucciones locales
             problem_m = NonlinearVariationalProblem(Rm, u_m, bcs=self.bcs_V)
             solver_m = NonlinearVariationalSolver(
                 problem_m,
