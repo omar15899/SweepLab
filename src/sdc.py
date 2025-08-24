@@ -792,6 +792,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             )
         )
 
+    @PETSc.Log.EventDecorator("solve_time_stepping")
     def solve(
         self,
         T,
@@ -800,207 +801,346 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         max_diadic: int = 10000,
     ):
         """
-        real_solution_exp = ufl expression to be projected over the W space dependent
-        on space and time if needed. X will be inputed considering that they
-        are going to be the coordinates OBJECT over the mesh.
-
+        Ejecuta time-stepping SDC. Funciona con layout paralelo "V" o "W",
+        y global. Si analysis=True, se usa W para métricas/colocación.
         """
+        try:
 
-        def _update_exact_field(t_now: float):
-            """
-            interpolates the exact solution over all of the subtime intervals
-            tau defined in the collocation problem.
-            """
-            if real_solution_exp is None:
-                return
-            x = self.PDEs.coord
-            for m, ru in enumerate(real_u.subfunctions):
-                local_t = t_now + self.tau[m] * self.deltat
-                ru.interpolate(real_solution_exp(x, local_t))
+            def _update_exact_field_W(t_now: float):
+                if real_solution_exp is None:
+                    return
+                for i, ru in enumerate(real_u.subfunctions):
+                    i_node = i // self.lenV
+                    local_t = t_now + float(self.tau[i_node]) * float(self.deltatC)
+                    self._t_exact.assign(local_t)
+                    ru.interpolate(self._exact_expr)
 
-        def _set_scale(k: int):
-            if self.prectype == "MIN-SR-FLEX":
-                self.scale.assign(1.0 / k)
+            def _set_scale(k: int):
+                if self.prectype == "MIN-SR-FLEX":
+                    self.scale.assign(1.0 / k)
+                else:
+                    self.scale.assign(1.0)
+
+            analysis = self.analysis
+            use_exact = real_solution_exp is not None
+            write_vtk = self.mode == "vtk"
+
+            t, step = 0.0, 0
+            err_intra = []
+
+            if analysis or use_exact:
+                assert self.uses_W, "Analysis or exact solution requires W."
+                use_exact = real_solution_exp is not None
+                if use_exact:
+                    real_u = Function(self.W, name="u_exact")
+
+                    X0 = self.PDEs.coord
+                    # tiempo como Constant reutilizable
+                    self._t_exact = Constant(0.0)
+                    self._exact_expr = real_solution_exp(X0, self._t_exact)
+
+                    # Inicializa u_exact con t inicial sin recompilar
+                    for u in real_u.subfunctions:
+                        u.interpolate(self._exact_expr)
+
+            convergence_results = {
+                "INFO": [
+                    "Total residual collocation",
+                    "Total residual sweep",
+                    "Sweep vs collocation error norm",
+                    "Sweep vs collocation compound norm",
+                    "Sweep vs real error norm",
+                    "Sweep vs real compound norm",
+                    "Collocation vs real error norm",
+                    "Collocation vs real compound norm",
+                ]
+            }
+
+            # Estride diádico (potencia de 2)
+            save_max = max_diadic
+            N_steps_total = int(np.ceil(T / float(self.deltat)))
+            base_stride = max(1, int(np.ceil((N_steps_total + 1) / float(save_max))))
+            SAVE_STRIDE = 1 << (base_stride - 1).bit_length()
+
+            save_idx = 0
+            wrote_T = False
+
+            def _maybe_save_checkpoint(afile, t_now: float):
+                nonlocal save_idx, wrote_T
+                tau_last = float(self.tau[-1]) if len(self.tau) > 0 else 1.0
+                t_tag = float(t_now + float(self.deltatC) * tau_last)
+                if abs(t_tag - T) <= 1e-12:
+                    wrote_T = True
+
+                last_fn = self._last_block_as_V(prev=False)
+                u_save = Function(last_fn.function_space(), name="u")
+                u_save.assign(last_fn)
+                afile.save_function(
+                    u_save, idx=save_idx, timestepping_info={"time": t_tag}
+                )
+
+                if use_exact:
+                    real_last = real_u.subfunctions[-1]
+                    real_save = Function(real_last.function_space(), name="u_exact")
+                    real_save.assign(real_last)
+                    afile.save_function(
+                        real_save, idx=save_idx, timestepping_info={"time": t_tag}
+                    )
+
+                if analysis:
+                    ucoll_last = self.u_collocation.subfunctions[-1]
+                    ucoll_save = Function(ucoll_last.function_space(), name="u_coll")
+                    ucoll_save.assign(ucoll_last)
+                    afile.save_function(
+                        ucoll_save, idx=save_idx, timestepping_info={"time": t_tag}
+                    )
+
+                save_idx += 1
+
+            def _maybe_save_vtk(vtk, vtk_coll, vtk_exact, t_now: float):
+                nonlocal save_idx, wrote_T
+                tau_last = float(self.tau[-1]) if len(self.tau) > 0 else 1.0
+                t_tag = float(t_now + float(self.deltatC) * tau_last)
+                vtk.write(self._get_last_state_view(), time=t_tag)
+                if analysis and vtk_coll is not None:
+                    vtk_coll.write(self.u_collocation.subfunctions[-1], time=t_tag)
+                if use_exact and vtk_exact is not None:
+                    vtk_exact.write(real_u.subfunctions[-1], time=t_tag)
+                if abs(t_tag - T) <= 1e-12:
+                    wrote_T = True
+                save_idx += 1
+
+            if not write_vtk:
+                with CheckpointFile(self.file, "a") as afile:
+                    afile.save_mesh(self.mesh)
+
+                    while t < T:
+                        dt_eff = min(self.deltat, T - t)
+                        self.deltatC.assign(dt_eff)
+                        self.t_0_subinterval.assign(t)
+                        if self.PDEs.time_dependent_constants_bts:
+                            for ct in self.PDEs.time_dependent_constants_bts:
+                                ct.assign(t)
+
+                        delta_prev = None
+                        rho_seq = []
+                        delta_seq = []
+
+                        if analysis:
+                            if self.is_parallel:
+                                self._sync_W_from_V()
+
+                            if step > 0:
+                                P = self.lenV
+                                M = self.M
+                                # u_0_collocation
+                                for p in range(P):
+                                    src = self.u_collocation.subfunctions[
+                                        p + (M - 1) * P
+                                    ]
+                                    for m in range(M):
+                                        self.u_0_collocation.subfunctions[
+                                            p + m * P
+                                        ].assign(src)
+
+                            t0_wall = time.perf_counter()
+                            self.collocation_solver.solve()
+                            if use_exact:
+                                _update_exact_field_W(t)
+                            collocation_wall_time = time.perf_counter() - t0_wall
+                            convergence_results[
+                                f"{step},{t},full_collocation_timing"
+                            ] = [
+                                {
+                                    "solver_index": "full_collocation",
+                                    "wall_time": collocation_wall_time,
+                                }
+                            ]
+                            analysis_metrics_0 = self._compute_analysis_metrics(
+                                real_u if use_exact else None, True, use_exact
+                            )
+                            convergence_results[f"{step},{t},0"] = [
+                                analysis_metrics_0["total_residual_collocation"],
+                                analysis_metrics_0["total_residual_sweep"],
+                                analysis_metrics_0["sweep_vs_collocation_errornorm"],
+                                analysis_metrics_0[
+                                    "sweep_vs_collocation_compound_norm"
+                                ],
+                                analysis_metrics_0["sweep_vs_real_errornorm"],
+                                analysis_metrics_0["sweep_vs_real_compound_norm"],
+                                analysis_metrics_0["collocation_vs_real_errornorm"],
+                                analysis_metrics_0["collocation_vs_real_compound_norm"],
+                            ]
+                        for k in range(1, sweeps + 1):
+                            _set_scale(k)
+                            if self.is_parallel:
+                                for m in range(self.M):
+                                    self.Uk_prev[m].assign(self.Uk_act[m])
+                            else:
+                                self.u_k_prev.assign(self.u_k_act)
+
+                            if analysis:
+                                self._sweep_loop()
+                            else:
+                                for s in self.sweep_solvers:
+                                    s.solve()
+
+                            if analysis:
+                                if self.is_parallel:
+                                    self._sync_W_from_V()
+
+                                try:
+                                    curr = self._last_block_as_V(prev=False)
+                                    prevv = self._last_block_as_V(prev=True)
+                                    du = Function(self.V)
+                                    du.assign(curr)
+                                    du -= prevv
+                                    delta = float(norm(du, norm_type="L2"))
+                                    delta_seq.append(delta)
+                                    eps = 1e-14
+                                    if delta_prev is not None and delta_prev > eps:
+                                        rho_seq.append(float(delta / delta_prev))
+                                    delta_prev = delta
+                                except Exception:
+                                    pass
+
+                                if use_exact:
+                                    _update_exact_field_W(t)
+
+                                analysis_metrics = self._compute_analysis_metrics(
+                                    real_u if use_exact else None, analysis, use_exact
+                                )
+                                convergence_results[f"{step},{t},{k}"] = [
+                                    analysis_metrics["total_residual_collocation"],
+                                    analysis_metrics["total_residual_sweep"],
+                                    analysis_metrics["sweep_vs_collocation_errornorm"],
+                                    analysis_metrics[
+                                        "sweep_vs_collocation_compound_norm"
+                                    ],
+                                    analysis_metrics["sweep_vs_real_errornorm"],
+                                    analysis_metrics["sweep_vs_real_compound_norm"],
+                                    analysis_metrics["collocation_vs_real_errornorm"],
+                                    analysis_metrics[
+                                        "collocation_vs_real_compound_norm"
+                                    ],
+                                ]
+                                convergence_results[f"{step},{t},contraction"] = {
+                                    "delta_last": (
+                                        float(delta_prev)
+                                        if delta_prev is not None
+                                        else None
+                                    ),
+                                    "rho_seq": rho_seq[:],
+                                    "delta_seq": delta_seq[:],
+                                }
+
+                                timings = []
+                                for row in self._timings_buffer:
+                                    meta = next(
+                                        (
+                                            m
+                                            for m in self._sweep_meta
+                                            if m.get("solver_index")
+                                            == row["solver_index"]
+                                        ),
+                                        {},
+                                    )
+                                    timings.append({**meta, **row})
+                                convergence_results[f"{step},{t},{k}_timings"] = timings
+
+                                err_intra.append(
+                                    analysis_metrics[
+                                        "sweep_vs_collocation_compound_norm"
+                                    ]
+                                    if analysis
+                                    else None
+                                )
+
+                                print(
+                                    f"step {step}  t={t:.4e}  "
+                                    f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
+                                    f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
+                                )
+
+                        print("\n\n\n")
+
+                        if (step % SAVE_STRIDE) == 0:
+                            _maybe_save_checkpoint(afile, t)
+
+                        self._sync_all_nodes_to_last()
+
+                        t += float(self.deltatC)
+                        step += 1
+
+                    if not wrote_T:
+                        tau_last = float(self.tau[-1]) if len(self.tau) > 0 else 1.0
+                        _maybe_save_checkpoint(
+                            afile, T - float(self.deltatC) * tau_last
+                        )
+
+                    convergence_results_path = (
+                        Path(self.file).with_suffix("").as_posix()
+                        + "_convergence_results.json"
+                    )
+                    with open(str(convergence_results_path), "w") as f:
+                        json.dump(convergence_results, f, indent=2)
+                    return step - 1
             else:
-                self.scale.assign(1.0)
-
-        analysis = self.analysis
-        use_exact = real_solution_exp is not None
-        write_vtk = self.mode == "vtk"
-
-        t, step = 0.0, 0
-        err_intra = []
-
-        if use_exact:
-            real_u = Function(self.W, name="u_exact")
-            X0 = self.PDEs.coord
-            for u in real_u.subfunctions:
-                u.interpolate(real_solution_exp(X0, t))
-
-        convergence_results = {
-            "INFO": [
-                "Total residual collocation",
-                "Total residual sweep",
-                "Sweep vs collocation error norm",
-                "Sweep vs collocation compound norm",
-                "Sweep vs real error norm",
-                "Sweep vs real compound norm",
-                "Collocation vs real error norm",
-                "Collocation vs real compound norm",
-                "T_seq",
-                "T_max",
-            ]
-        }
-
-        # Choose a stride as a power of 2 so that output times align between runs
-        # with dyadic time steps. Ensures consistent output times for comparisons.
-        save_max = max_diadic
-        N_steps_total = int(np.ceil(T / float(self.deltat)))  # nº total de pasos
-        base_stride = max(1, int(np.ceil((N_steps_total + 1) / float(save_max))))
-        # potencia de 2 mínima >= base_stride
-        SAVE_STRIDE = 1 << (base_stride - 1).bit_length()
-
-        # Compact index for saved states (separate from time step index)
-        # and flag to mark if the final T snapshot has been saved
-        save_idx = 0
-        wrote_T = False
-
-        def _maybe_save_checkpoint(afile, t_now: float):
-            """
-            Save solution (and exact/collocation fields if applicable)
-            at the current time 't_now' to a checkpoint file.
-            - Uses the compact save index 'save_idx'
-            - Marks if the final time T is saved
-            """
-            nonlocal save_idx, wrote_T
-
-            # Determine physical time of the last collocation node; usually tau[-1] = 1.0
-            tau_last = (
-                float(self.tau[-1])
-                if hasattr(self, "tau") and len(self.tau) > 0
-                else 1.0
-            )
-            t_tag = float(t_now + self.deltat * tau_last)
-
-            # Save a fresh Function to avoid renaming side-effects on live fields
-            last_fn = self._last_block_as_V(prev=False)
-            u_save = Function(last_fn.function_space(), name="u")
-            u_save.assign(last_fn)
-            afile.save_function(u_save, idx=save_idx, timestepping_info={"time": t_tag})
-
-            if use_exact:
-                real_last = real_u.subfunctions[-1]
-                real_save = Function(real_last.function_space(), name="u_exact")
-                real_save.assign(real_last)
-                afile.save_function(
-                    real_save, idx=save_idx, timestepping_info={"time": t_tag}
+                vtk = VTKFile(self.file)
+                vtk_coll = (
+                    VTKFile(Path(self.file).with_suffix("").as_posix() + "_ucoll.pvd")
+                    if analysis
+                    else None
                 )
-
-            if analysis:
-                ucoll_last = self.u_collocation.subfunctions[-1]
-                ucoll_save = Function(ucoll_last.function_space(), name="u_coll")
-                ucoll_save.assign(ucoll_last)
-                afile.save_function(
-                    ucoll_save, idx=save_idx, timestepping_info={"time": t_tag}
+                vtk_exact = (
+                    VTKFile(Path(self.file).with_suffix("").as_posix() + "_uexact.pvd")
+                    if use_exact
+                    else None
                 )
-
-            if abs(t_now - T) <= 1e-12:
-                wrote_T = True
-            save_idx += 1
-
-        def _maybe_save_vtk(vtk, vtk_coll, vtk_exact, t_now: float):
-            """
-            Save solution (and exact/collocation fields if applicable)
-            at the current time 't_now' to VTK files.
-            - Uses the compact save index 'save_idx'
-            - Marks if the final time T is saved
-            """
-            nonlocal save_idx, wrote_T
-
-            # Determine physical time of the last collocation node for VTK time tag
-            tau_last = (
-                float(self.tau[-1])
-                if hasattr(self, "tau") and len(self.tau) > 0
-                else 1.0
-            )
-            t_tag = float(t_now + self.deltat * tau_last)
-
-            vtk.write(self._get_last_state_view(), time=t_tag)
-            if analysis and vtk_coll is not None:
-                vtk_coll.write(self.u_collocation.subfunctions[-1], time=t_tag)
-            if use_exact and vtk_exact is not None:
-                vtk_exact.write(real_u.subfunctions[-1], time=t_tag)
-
-            if abs(t_now - T) <= 1e-12:
-                wrote_T = True
-            save_idx += 1
-
-        if not write_vtk:
-            with CheckpointFile(self.file, "a") as afile:
-                # Save the mesh
-                afile.save_mesh(self.mesh)
 
                 while t < T:
+                    print(f"step {step}  t={t:.4e}")
+                    dt_eff = min(self.deltat, T - t)
+                    self.deltatC.assign(dt_eff)
+                    self.t_0_subinterval.assign(t)
+                    if self.PDEs.time_dependent_constants_bts:
+                        for ct in self.PDEs.time_dependent_constants_bts:
+                            ct.assign(t)
 
-                    # Contraction metrics initialization
-                    delta_prev = None
-                    rho_seq = []
-                    delta_seq = []
-
-                    # Solve the full collocation solver
                     if analysis:
-                        for u in self.u_0_collocation.subfunctions:
-                            u.assign(self.u_collocation.subfunctions[-1])
+                        if self.is_parallel:
+                            self._sync_W_from_V()
+                        if step > 0:
+                            P = self.lenV
+                            M = self.M
+                            for p in range(P):
+                                src = self.u_collocation.subfunctions[p + (M - 1) * P]
+                                for m in range(M):
+                                    self.u_0_collocation.subfunctions[p + m * P].assign(
+                                        src
+                                    )
 
-                        t0 = time.perf_counter()
                         self.collocation_solver.solve()
-                        collocation_wall_time = time.perf_counter() - t0
 
-                        convergence_results[f"{step},{t},full_collocation_timing"] = [
-                            {
-                                "solver_index": "full_collocation",
-                                "wall_time": collocation_wall_time,
-                            }
-                        ]
+                    if use_exact:
+                        _update_exact_field_W(t)
 
-                    # Apply the sweep
                     for k in range(1, sweeps + 1):
                         _set_scale(k)
-                        self.u_k_prev.assign(self.u_k_act)
-                        # Calculate the new values in the efficient way if
-                        # no analytics happening, if not use call stack
+                        if self.is_parallel:
+                            for m in range(self.M):
+                                self.Uk_prev[m].assign(self.Uk_act[m])
+                        else:
+                            self.u_k_prev.assign(self.u_k_act)
+
                         if analysis:
                             self._sweep_loop()
-                        else:
-                            for s in self.sweep_solvers:
-                                s.solve()
+                            if self.is_parallel:
+                                self._sync_W_from_V()
 
-                        if analysis:
-                            try:
-                                du = Function(
-                                    self.u_k_act.subfunctions[-1].function_space()
-                                )
-                                du.assign(self.u_k_act.subfunctions[-1])
-                                du -= self.u_k_prev.subfunctions[-1]
-                                delta = float(norm(du, norm_type="L2"))
-                                delta_seq.append(delta)
-
-                                eps = 1e-14
-                                if delta_prev is not None and delta_prev > eps:
-                                    rho_seq.append(float(delta / delta_prev))
-
-                                delta_prev = delta
-
-                            except Exception:
-                                pass
-
-                            _update_exact_field(t) if use_exact else None
                             analysis_metrics = self._compute_analysis_metrics(
-                                real_u if use_exact else None,
-                                analysis,
-                                use_exact,
+                                real_u if use_exact else None, analysis, use_exact
                             )
-
                             convergence_results[f"{step},{t},{k}"] = [
                                 analysis_metrics["total_residual_collocation"],
                                 analysis_metrics["total_residual_sweep"],
@@ -1011,16 +1151,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                 analysis_metrics["collocation_vs_real_errornorm"],
                                 analysis_metrics["collocation_vs_real_compound_norm"],
                             ]
-
-                            convergence_results[f"{step},{t},contraction"] = {
-                                "delta_last": (
-                                    float(delta_prev)
-                                    if delta_prev is not None
-                                    else None
-                                ),
-                                "rho_seq": rho_seq[:],
-                                "delta_seq": delta_seq[:],
-                            }
 
                             timings = []
                             for row in self._timings_buffer:
@@ -1033,45 +1163,33 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                                     {},
                                 )
                                 timings.append({**meta, **row})
-
                             convergence_results[f"{step},{t},{k}_timings"] = timings
-
-                            err_intra.append(
-                                analysis_metrics["sweep_vs_collocation_compound_norm"]
-                                if analysis
-                                else None
-                            )
 
                             print(
                                 f"step {step}  t={t:.4e}  "
                                 f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
                                 f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
                             )
-                    print("\n\n\n")
+                        else:
+                            for s in self.sweep_solvers:
+                                s.solve()
 
-                    # --- Dyadic save: only when stride matches ---
                     if (step % SAVE_STRIDE) == 0:
-                        _maybe_save_checkpoint(afile, t)
+                        _maybe_save_vtk(vtk, vtk_coll, vtk_exact, t)
 
-                    # Synchronize states across subfunctions
-                    u_last_node = self.u_k_act.subfunctions[-1]
-                    for sub in (
-                        *self.u_k_act.subfunctions,
-                        *self.u_k_prev.subfunctions,
-                        *self.u_0.subfunctions,
-                    ):
-                        sub.assign(u_last_node)
+                    self._sync_all_nodes_to_last()
 
-                    # Advance physical time and book-keeping
-                    t += self.deltat
-                    self.t_0_subinterval.assign(t)
+                    t += float(self.deltatC)
                     if self.PDEs.time_dependent_constants_bts:
                         for ct in self.PDEs.time_dependent_constants_bts:
                             ct.assign(t)
                     step += 1
 
                 if not wrote_T:
-                    _maybe_save_checkpoint(afile, T)
+                    tau_last = float(self.tau[-1]) if len(self.tau) > 0 else 1.0
+                    _maybe_save_vtk(
+                        vtk, vtk_coll, vtk_exact, T - float(self.deltatC) * tau_last
+                    )
 
                 convergence_results_path = (
                     Path(self.file).with_suffix("").as_posix()
@@ -1080,104 +1198,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 with open(str(convergence_results_path), "w") as f:
                     json.dump(convergence_results, f, indent=2)
                 return step - 1
-
-        else:
-            vtk = VTKFile(self.file)
-            u_out = self.u_k_act.subfunctions[-1]
-
-            vtk_coll = (
-                VTKFile(Path(self.file).with_suffix("").as_posix() + "_ucoll.pvd")
-                if analysis
-                else None
-            )
-            vtk_exact = (
-                VTKFile(Path(self.file).with_suffix("").as_posix() + "_uexact.pvd")
-                if use_exact
-                else None
-            )
-
-            while t < T:
-                print(f"step {step}  t={t:.4e}")
-
-                if analysis:
-                    self.collocation_solver.solve()
-                    for u in self.u_0_collocation.subfunctions:
-                        u.assign(self.u_collocation.subfunctions[-1])
-
-                if use_exact:
-                    _update_exact_field(t)
-
-                for k in range(1, sweeps + 1):
-                    _set_scale(k)
-                    self.u_k_prev.assign(self.u_k_act)
-
-                    if analysis:
-                        self._sweep_loop()
-                    else:
-                        for s in self.sweep_solvers:
-                            s.solve()
-
-                    if analysis:
-                        _update_exact_field(t) if use_exact else None
-                        analysis_metrics = self._compute_analysis_metrics(
-                            real_u if use_exact else None,
-                            analysis,
-                            use_exact,
-                        )
-                        convergence_results[f"{step},{t},{k}"] = [
-                            analysis_metrics["total_residual_collocation"],
-                            analysis_metrics["total_residual_sweep"],
-                            analysis_metrics["sweep_vs_collocation_errornorm"],
-                            analysis_metrics["sweep_vs_collocation_compound_norm"],
-                            analysis_metrics["sweep_vs_real_errornorm"],
-                            analysis_metrics["sweep_vs_real_compound_norm"],
-                            analysis_metrics["collocation_vs_real_errornorm"],
-                            analysis_metrics["collocation_vs_real_compound_norm"],
-                        ]
-
-                        timings = []
-                        for row in self._timings_buffer:
-                            meta = next(
-                                (
-                                    m
-                                    for m in self._sweep_meta
-                                    if m.get("solver_index") == row["solver_index"]
-                                ),
-                                {},
-                            )
-                            timings.append({**meta, **row})
-                        convergence_results[f"{step},{t},{k}_timings"] = timings
-
-                        print(
-                            f"step {step}  t={t:.4e}  "
-                            f"res_sweep={analysis_metrics['total_residual_sweep']:.3e}  "
-                            f"err_coll={analysis_metrics['sweep_vs_collocation_errornorm']}"
-                        )
-                # --- Guardado diádico en VTK ---
-                if (step % SAVE_STRIDE) == 0:
-                    _maybe_save_vtk(vtk, vtk_coll, vtk_exact, t)
-
-                # Sincronizar estados entre subfunciones
-                for sub in (
-                    *self.u_k_act.subfunctions,
-                    *self.u_k_prev.subfunctions,
-                    *self.u_0.subfunctions,
-                ):
-                    sub.assign(u_out)
-
-                t += self.deltat
-                self.t_0_subinterval.assign(t)
-                if self.PDEs.time_dependent_constants_bts:
-                    for ct in self.PDEs.time_dependent_constants_bts:
-                        ct.assign(t)
-                step += 1
-
-            if not wrote_T:
-                _maybe_save_vtk(vtk, vtk_coll, vtk_exact, T)
-
-            convergence_results_path = (
-                Path(self.file).with_suffix("").as_posix() + "_convergence_results.json"
-            )
-            with open(str(convergence_results_path), "w") as f:
-                json.dump(convergence_results, f, indent=2)
-            return step - 1
+        finally:
+            # Cierre del log de PETSc (si está disponible)
+            try:
+                self._write_and_close_log()
+            except Exception:
+                pass
