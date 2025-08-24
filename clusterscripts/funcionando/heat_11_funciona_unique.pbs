@@ -1,0 +1,240 @@
+#!/bin/bash
+#PBS -N heat_11_funciona_unique
+#PBS -q parallel64
+#PBS -j oe
+#PBS -m abe
+#PBS -M ok24@ic.ac.uk
+# (NO CAMBIAR FORMATO ANTIGUO)
+#PBS -l nodes=1:ppn=1,mem=128gb,walltime=24:00:00
+#PBS -V
+
+set -euo pipefail
+umask 077
+
+# ---------- entorno numérico ----------
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH || true
+export PYTHONUNBUFFERED=1
+
+# ---------- rutas ----------
+USR="${USR:-ok24}"
+HOME_DIR="/home/ma/o/${USR}"
+PY_SCRIPT="${PY_SCRIPT:-${HOME_DIR}/clusterscripts/sdc_heat_equation.py}"
+FINAL_ROOT="${FINAL_ROOT:-/home/clustor2/ma/o/${USR}/solver_results/heatfiles/mesh_runs}"
+LOGDIR="${LOGDIR:-/home/clustor2/ma/o/${USR}/logs}"
+mkdir -p "$FINAL_ROOT" "$LOGDIR"
+
+# ---------- logging propio (independiente de PBS) ----------
+JOBTAG="${PBS_JOBNAME:-sdc_mesh_pool}.${PBS_JOBID:-$$}"
+STDOUT_LOG="${LOGDIR}/${JOBTAG}.stdout"
+STDERR_LOG="${LOGDIR}/${JOBTAG}.stderr"
+: >"$STDOUT_LOG"; : >"$STDERR_LOG"
+exec > >(stdbuf -oL awk '{print strftime("[%F %T]"), $0}' | tee -a "$STDOUT_LOG")
+exec 2> >(stdbuf -oL awk '{print strftime("[%F %T]"), $0}' | tee -a "$STDERR_LOG" >&2)
+
+# ---------- Firedrake ----------
+# shellcheck disable=SC1091
+source /usr/local/firedrake/bin/activate
+
+python3 - <<'PY'
+import sys, numpy, petsc4py; import firedrake
+print("OK env:", "py",sys.version.split()[0], "np",numpy.__version__, "petsc4py",petsc4py.__version__)
+PY
+
+# ---------- scratch del nodo ----------
+HNAME=$(hostname)
+NN="${HNAME#macomp}"
+SCRATCH="/scratchcomp${NN}"
+[ -d "$SCRATCH" ] && [ -w "$SCRATCH" ] || SCRATCH="${TMPDIR:-/tmp}"
+RUNROOT="${SCRATCH%/}/sdc_${PBS_JOBID%%.*}"
+mkdir -p "$RUNROOT"
+
+# ---------- IO/HDF5 seguro ----------
+export HDF5_USE_FILE_LOCKING=FALSE
+export HDF5_DISABLE_FILE_LOCKING=1
+export HDF5_DISABLE_VERSION_CHECK=2
+export HDF5_DRIVER=sec2
+
+# ---------- volcado incremental (mirror + archive) ----------
+OUTJOB="${FINAL_ROOT%/}/${PBS_JOBID%%.*}"
+OUTMIRROR="$OUTJOB/mirror"   # espejo 1:1 del scratch
+OUTARCH="$OUTJOB/archive"    # artefactos finalizados
+mkdir -p "$OUTMIRROR" "$OUTARCH"
+
+SYNC_SECS="${SYNC_SECS:-600}"
+sync_out(){ rsync -a --delete "$RUNROOT/" "$OUTMIRROR/"; }
+
+KEEP_SYNC=1
+( while [ "$KEEP_SYNC" -eq 1 ]; do sleep "$SYNC_SECS"; sync_out; done ) & SYNC_PID=$!
+
+on_term(){ echo "[WARN] SIGTERM (walltime). Sync…"; KEEP_SYNC=0; kill "$SYNC_PID" 2>/dev/null || true; sync_out; exit 143; }
+on_exit(){ KEEP_SYNC=0; kill "$SYNC_PID" 2>/dev/null || true; sync_out; }
+trap on_term TERM
+trap on_exit EXIT
+
+# ---------- parámetros maestros ----------
+SMOKE="${SMOKE:-1}"
+TFINAL="${TFINAL:-1.0}"
+
+if [ "$SMOKE" = "1" ]; then
+  NCELLS_LIST="${NCELLS_LIST:-8}"
+  DT_LIST="${DT_LIST:-5e-1}"
+  M_LIST="${M_LIST:-6}"
+  DEGREE_LIST="${DEGREE_LIST:-1 2 3 4}"
+else
+  NCELLS_LIST="${NCELLS_LIST:-2 4 8 16 32 64 128 256 512}"
+  DT_LIST="${DT_LIST:-1e-1 1e-2 1e-3 1e-4 1e-5}"
+  M_LIST="${M_LIST:-1 2 3 4 5 6 7 8 9 10}"
+  DEGREE_LIST="${DEGREE_LIST:-1 2 3 4}"
+fi
+PRECTYPE_LIST="${PRECTYPE_LIST:-MIN-SR-FLEX MIN-SR-NS}"
+IS_PAR_LIST="${IS_PAR_LIST:-1 0}"
+
+# ---------- helper JSON ----------
+build_params_json () {
+  python3 - <<'PY'
+import json, os
+def fget(k,d): return float(os.environ.get(k,str(d)))
+def iget(k,d): return int(os.environ.get(k,str(d)))
+def bget(k,d): return str(os.environ.get(k,str(int(d)))).lower() in ("1","true","yes","on")
+cfg = dict(
+  dt=fget("DT",5e-1),
+  n_cells=iget("NCELLS",8),
+  sweeps=iget("SWEEPS",iget("M",6)),
+  M=iget("M",6),
+  Tfinal=fget("TFINAL",1.0),
+  is_parallel=bget("IS_PAR",True),
+  prectype=os.environ.get("PREC","MIN-SR-FLEX"),
+  degree=iget("DEGREE",1),
+  analysis=bget("ANALYSIS",True),
+  mode=os.environ.get("MODE","checkpoint"),
+  folder_name=".",
+  path_name=os.environ["OUTDIR"]
+)
+print(json.dumps(cfg))
+PY
+}
+
+# ---------- utilidades de copia seguras ----------
+safe_copy_one () {  # safe_copy_one <src> <dst>
+  [ -e "$1" ] && cp -f -- "$1" "$2" || true
+}
+safe_copy_globs () {  # safe_copy_globs "<glob1>" "<glob2>" ... <dest>
+  local dest="${!#}"; local g
+  for g in "${@:1:$(($#-1))}"; do
+    for f in $g; do [ -e "$f" ] && cp -f -- "$f" "$dest"; done
+  done
+}
+
+# ---------- concurrencia ----------
+if [ -z "${MAX_WORKERS:-}" ]; then
+  if [ "${PBS_QUEUE:-}" = "parallel64" ]; then
+    MAX_WORKERS=48
+  elif [ -f "${PBS_NODEFILE:-}" ]; then
+    MAX_WORKERS=$(wc -l < "$PBS_NODEFILE")
+  else
+    MAX_WORKERS=1
+  fi
+fi
+echo "[INFO] queue=${PBS_QUEUE:-?}  MAX_WORKERS=$MAX_WORKERS  host=$(hostname)"
+
+pids=(); running=0
+
+launch_case () {
+  local n="$1" dt="$2" m="$3" deg="$4" prec="$5" ispar="$6"
+  local out="${RUNROOT}/n${n}_dt${dt}_M${m}_deg${deg}_prec${prec}_par${ispar}"
+  mkdir -p "$out"
+
+  export XDG_CACHE_HOME="${out}/.cache/xdg"; mkdir -p "$XDG_CACHE_HOME"
+  export PYOP2_CACHE_DIR="${out}/.cache/pyop2"
+  export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="${out}/.cache/firedrake/tsfc"
+  mkdir -p "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR"
+
+  export OUTDIR="$out"
+  export DT="$dt" NCELLS="$n" M="$m" TFINAL="$TFINAL"
+  export SWEEPS="${SWEEPS:-$m}"         # <—— cambio mínimo: permite SWEEPS≠M si se pasa por entorno
+  export IS_PAR="$ispar" PREC="$prec" DEGREE="$deg" ANALYSIS="${ANALYSIS:-1}" MODE="${MODE:-checkpoint}"
+  export SDC_OUTPUT_DIR="$out"
+  export SDC_PARAMS_JSON="$(build_params_json)"
+  export PETSC_OPTIONS="${PETSC_OPTIONS:-}-log_view :${out}/petsc.log"
+
+  echo "[RUN] n=$n dt=$dt M=$m sweeps=$SWEEPS deg=$deg prec=$prec is_par=$ispar -> $out"
+
+  (
+    # Aislamos errores por caso para que el pool continúe
+    set +e
+    start_ts=$(date +%s)
+
+    # (Opcional) timeout por caso: export CASE_TIMEOUT="12h" para activarlo
+    if [ -n "${CASE_TIMEOUT:-}" ]; then
+      timeout "$CASE_TIMEOUT" python3 -u "$PY_SCRIPT" >"${out}/run.log" 2>&1
+    else
+      python3 -u "$PY_SCRIPT" >"${out}/run.log" 2>&1
+    fi
+    rc=$?
+
+    end_ts=$(date +%s)
+    dur=$((end_ts - start_ts))
+    status="OK"
+    case "$rc" in
+      0) status="OK" ;;
+      124|137) status="TIMEOUT" ;;
+      *) status="FAIL" ;;
+    esac
+    echo "[STATUS] rc=$rc status=$status duration=${dur}s" | tee -a "${out}/run.log"
+    : > "${out}/${status}"
+
+    # Volcado de artefactos (si existen)
+    sig="n${n}_dt${dt}_M${m}_deg${deg}_prec${prec}_par${ispar}_tf${TFINAL}"
+    safe_copy_one "${out}/run.log"   "$OUTARCH/run_${sig}.log"
+    safe_copy_one "${out}/petsc.log" "$OUTARCH/petsc_${sig}.log"
+    safe_copy_globs "$out"/*.h5 "$out"/*_convergence_results.json "$out"/*_log.txt "$OUTARCH"
+
+    # Índice CSV
+    {
+      [ ! -e "$OUTARCH/index.csv" ] && echo "signature,status,rc,seconds" > "$OUTARCH/index.csv"
+      echo "${sig},${status},${rc},${dur}"
+    } >> "$OUTARCH/index.csv"
+
+    set -e
+    rm -rf "$out" || true
+    sync_out
+  ) &
+
+  pids+=("$!")
+  running=$((running+1))
+}
+
+wait_one () {
+  if wait -n 2>/dev/null; then :; else
+    local pid="${pids[0]:-}"; [ -n "$pid" ] && wait "$pid" || true
+    pids=("${pids[@]:1}")
+  fi
+  running=$((running-1))
+}
+
+# ---------- barrido ----------
+for PREC in $PRECTYPE_LIST; do
+  for IS_PAR in $IS_PAR_LIST; do
+    for DEGREE in $DEGREE_LIST; do
+      for NCELLS in $NCELLS_LIST; do
+        for DT in $DT_LIST; do
+          for M in $M_LIST; do
+            while [ "$running" -ge "$MAX_WORKERS" ]; do wait_one; done
+            launch_case "$NCELLS" "$DT" "$M" "$DEGREE" "$PREC" "$IS_PAR"
+          done
+        done
+      done
+    done
+  done
+done
+
+while [ "$running" -gt 0 ]; do wait_one; done
+
+echo "[INFO] Terminado. OUTMIRROR=$OUTMIRROR  OUTARCH=$OUTARCH"
+ls -lh "$OUTARCH" | sed -n '1,200p' || true
+[ -f "$OUTARCH/index.csv" ] && { echo "[INDEX] $OUTARCH/index.csv"; column -s, -t "$OUTARCH/index.csv" | sed -n '1,200p'; } || true
