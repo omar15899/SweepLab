@@ -74,6 +74,14 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.solver_parameters = solver_parameters
         self.analysis = analysis
 
+        # --- PETSc logging: output file and start logging ---
+        self._log_txt = Path(self.file).with_suffix("").as_posix() + "_petsc.log"
+        try:
+            PETSc.Log.begin()
+        except Exception:
+            pass
+        self._petsc_viewer = None
+
         # For time measuring, we define two list of dictionaries
         self._sweep_meta: list[dict] = []
         self._timings_buffer: list[dict] = []
@@ -281,6 +289,30 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             total += float(norm(vec, norm_type="L2"))
         return total
 
+    def _write_and_close_log(self):
+        """Dump PETSc log al fichero y cerrar el viewer explícitamente (seguro en cluster)."""
+        try:
+            viewer = getattr(self, "_petsc_viewer", None)
+            if viewer is None:
+                viewer = PETSc.Viewer().createASCII(
+                    self._log_txt, comm=PETSc.COMM_WORLD
+                )
+            PETSc.Log.view(viewer)
+            try:
+                viewer.flush()
+            except Exception:
+                pass
+            try:
+                viewer.destroy()
+            except Exception:
+                pass
+            try:
+                self._petsc_viewer = None
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _define_node_time_boundary_setup(self):
         """
         Need to be very awayre of how Firedrake flattens
@@ -391,11 +423,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         use_collocation: bool,
         use_exact: bool,
     ) -> dict[str, float | None]:
-        """ """
-        residual_sweep_vecs = (
-            assemble(Rm).riesz_representation() for Rm in self.R_sweep
-        )
-        total_residual_sweep = sum(norm(r) for r in residual_sweep_vecs)
+        total_residual_sweep = self._total_residual_sweep_aggregated()
 
         if use_collocation:
             vec_coll = assemble(self.R_coll).riesz_representation()
@@ -415,10 +443,18 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         def _h1_semi_of_fn(f: Function) -> float:
             return float((assemble(inner(grad(f), grad(f)) * dx)) ** 0.5)
 
-        def _time_L2(err_nodes: list[Function]) -> float:
-            w = np.asarray(self.Q[-1, :], dtype=float)  # pesos b_j (fila última de Q)
-            vals = np.array([_l2_space(e) for e in err_nodes], dtype=float)
-            return float(self.deltat * float(np.dot(w, vals**2))) ** 0.5
+        def _time_L2(err_nodes_flat: list[Function]) -> float:
+            w = np.asarray(self.Q[-1, :], dtype=float)
+            M = self.M
+            P = self.lenV
+            vals = np.empty(M, dtype=float)
+            for m in range(M):
+                block = err_nodes_flat[m * P : (m + 1) * P]
+                s2 = 0.0
+                for e in block:
+                    s2 += _l2_space(e) ** 2
+                vals[m] = s2**0.5
+            return float(float(self.deltatC) * float(np.dot(w, vals**2))) ** 0.5
 
         if use_collocation:
             sweep_vs_coll_err = errornorm(
@@ -438,7 +474,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     self.u_collocation.subfunctions, self.u_k_act.subfunctions
                 )
             ]
-            sweep_vs_coll_H1 = _h1_semi_of_fn(e_nodes[-1])
+            sweep_vs_coll_H1 = (
+                sum(_h1_semi_of_fn(e) ** 2 for e in e_nodes[-self.lenV :])
+            ) ** 0.5
             sweep_vs_coll_timeL2 = _time_L2(e_nodes)
         else:
             sweep_vs_coll_err = None
@@ -446,7 +484,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             sweep_vs_coll_H1 = None
             sweep_vs_coll_timeL2 = None
 
-        # Errores vs solución exacta
         if use_exact and real_u is not None:
             sweep_vs_real_err = errornorm(
                 real_u.subfunctions[-1],
@@ -461,7 +498,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 _diff_fn(r, u_k)
                 for r, u_k in zip(real_u.subfunctions, self.u_k_act.subfunctions)
             ]
-            sweep_vs_real_H1 = _h1_semi_of_fn(e_nodes_real[-1])
+            sweep_vs_real_H1 = (
+                sum(_h1_semi_of_fn(e) ** 2 for e in e_nodes_real[-self.lenV :])
+            ) ** 0.5
             sweep_vs_real_timeL2 = _time_L2(e_nodes_real)
         else:
             sweep_vs_real_err = None
@@ -469,7 +508,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             sweep_vs_real_H1 = None
             sweep_vs_real_timeL2 = None
 
-        # Collocation vs real (como antes)
         if use_collocation and use_exact and real_u is not None:
             coll_vs_real_err = errornorm(
                 self.u_collocation.subfunctions[-1],
@@ -537,8 +575,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             or {
                 "snes_type": "newtonls",
                 "snes_rtol": 1e-8,
-                "ksp_type": "preonly",
-                "pc_type": "lu",
+                "ksp_type": "gmres",
+                "pc_type": "hypre",
             },
         )
 
