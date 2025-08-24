@@ -78,8 +78,7 @@ def solve_heat_pde(
         is_parallel=is_parallel,
         solver_parameters={
             "snes_type": "newtonls",
-            # "snes_rtol": 1e-14,
-            # "snes_atol": 1e-16,
+            "snes_rtol": 1e-8,
             "ksp_type": "preonly",
             "pc_type": "lu",
         },

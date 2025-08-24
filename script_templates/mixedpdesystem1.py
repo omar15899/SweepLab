@@ -114,7 +114,6 @@ def solve_mixed_heat_system(
         analysis=full_collocation,
         solver_parameters={
             "snes_type": "newtonls",
-            "snes_rtol": 1e-8,
             "ksp_type": "preonly",
             "pc_type": "lu",
         },

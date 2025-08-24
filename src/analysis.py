@@ -1,12 +1,67 @@
-import re
-import gc
-import itertools
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable
 from firedrake import *
 from .filenamer import FileNamer, CheckpointAnalyser
 import matplotlib.pyplot as plt
+from contextlib import contextmanager
 import pandas as pd
+import re
+import gc
+
+
+@contextmanager
+def pub_style(width_in=3.25, height_in=None, fontsize=9):
+    """
+    Context manager to apply a publication-grade Matplotlib style
+    (single-figure layout, LaTeX-like fonts, tight spacing).
+    width_in ~ 3.25in fits 1-column; use ~6.5in for 2-column.
+    """
+    if height_in is None:
+        # Golden ratio-ish height for aesthetics
+        height_in = width_in * 0.62
+    old = plt.rcParams.copy()
+    try:
+        plt.rcParams.update(
+            {
+                "figure.figsize": (width_in, height_in),
+                "figure.dpi": 300,
+                "font.size": fontsize,
+                "axes.labelsize": fontsize,
+                "axes.titlesize": fontsize + 1,
+                "xtick.labelsize": fontsize - 1,
+                "ytick.labelsize": fontsize - 1,
+                "legend.fontsize": fontsize - 1,
+                "axes.linewidth": 1.0,
+                "xtick.direction": "in",
+                "ytick.direction": "in",
+                "xtick.minor.visible": True,
+                "ytick.minor.visible": True,
+                "grid.alpha": 0.25,
+                "grid.linestyle": ":",
+                "savefig.bbox": "tight",
+                "savefig.pad_inches": 0.01,
+                "text.usetex": False,
+                "font.family": "serif",
+                "mathtext.fontset": "stix",
+                "axes.titleweight": "semibold",
+            }
+        )
+        yield
+    finally:
+        plt.rcParams.update(old)
+
+
+def save_pub_figure(
+    fig, stem: str, folder: str = "figures", dpi: int = 300, also_pdf: bool = True
+):
+    """
+    Save a figure with FileNamer in PNG (and optionally PDF for vector quality).
+    """
+    namer_png = FileNamer(file_name=stem, folder_name=folder, mode="png")
+    fig.savefig(namer_png.file, dpi=dpi)
+    if also_pdf:
+        namer_pdf = FileNamer(file_name=stem, folder_name=folder, mode="pdf")
+        fig.savefig(namer_pdf.file)
 
 
 class ConvergenceAnalyser(CheckpointAnalyser):
@@ -110,34 +165,36 @@ class ConvergenceAnalyser(CheckpointAnalyser):
 
         for col in df.columns:
             y = df[col].astype(float).to_numpy()
+            with pub_style(width_in=3.25, fontsize=9):
+                fig, ax = plt.subplots()
+                ax.scatter(x, y, s=40, label="data")
+                ax.set_xscale("log")
+                ax.set_yscale("log")
+                ax.set_xlabel(x_label)
+                ax.set_ylabel(f"{col} error (L2)")
 
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.scatter(x, y, s=40, label="data")
-            ax.set_xscale("log")
-            ax.set_yscale("log")
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(f"{col} error (L2)")
+                mask = (x > 0) & (y > 0)
+                if mask.sum() >= 2:
+                    m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
+                    p = m
+                    orders[col] = p
+                    ax.plot(
+                        x[mask],
+                        np.exp(b) * x[mask] ** m,
+                        "--",
+                        label=f"fitting: p≈{p:.2f}",
+                    )
+                else:
+                    orders[col] = np.nan
 
-            mask = (x > 0) & (y > 0)
-            if mask.sum() >= 2:
-                m, b = np.polyfit(np.log(x[mask]), np.log(y[mask]), 1)
-                p = m
-                orders[col] = p
-                ax.plot(
-                    x[mask], np.exp(b) * x[mask] ** m, "--", label=f"fitting: p≈{p:.2f}"
-                )
-            else:
-                orders[col] = np.nan
+                ax.set_title(title_fmt.format(col=col, order=orders[col]))
+                ax.legend(frameon=False)
+                ax.grid(True, which="both", alpha=0.4)
+                fig.tight_layout()
 
-            ax.set_title(title_fmt.format(col=col, order=orders[col]))
-            ax.legend(frameon=False)
-            ax.grid(True, which="both", alpha=0.4)
-            fig.tight_layout()
-
-            stem = file_stem or f"conv_{x_label}_{col}"
-            namer = FileNamer(file_name=stem, folder_name=str(save_dir), mode="png")
-            fig.savefig(namer.file, dpi=dpi)
-            plt.close(fig)
+                stem = file_stem or f"conv_{x_label}_{col}"
+                save_pub_figure(fig, stem, folder=str(save_dir), dpi=dpi, also_pdf=True)
+                plt.close(fig)
 
         return orders
 
