@@ -68,7 +68,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
         self.mesh = mesh
         self.PDEs = PDEs
-        self.deltat = dt
+        self.deltat = float(dt)
+        self.deltatC = Constant(self.deltat)
         self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
         self.analysis = analysis
@@ -132,6 +133,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             # bueno más cosas). Para más información mirar mi librería de finite
             # elements.
 
+        # --- Nodal lists on V (always present) ---
+        self.U0 = [Function(self.V, name=f"U0[{m}]") for m in range(self.M)]
+        self.Uk_prev = [Function(self.V, name=f"Uk_prev[{m}]") for m in range(self.M)]
+        self.Uk_act = [Function(self.V, name=f"Uk_act[{m}]") for m in range(self.M)]
         # As all the functions are vectorial in the codomain due
         # to the nodal discretisation of the temporal axis
         for m in range(self.M):
@@ -498,7 +503,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
     def _setup_full_collocation_solver(self):
-        deltat, tau, t0, f = self.deltat, self.tau, self.t_0_subinterval, self.PDEs.f
+        deltat, tau, t0, f = self.deltatC, self.tau, self.t_0_subinterval, self.PDEs.f
         Q = self.Q
         w = TestFunction(self.W)
         # We could use the mixed space but it's nonsense, as we don't have coupling
@@ -540,7 +545,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
     @PETSc.Log.EventDecorator("_setup_parallel_sweep_solver_V")
     def _setup_parallel_sweep_solver_V(self):
         """ """
-        deltat = self.deltat
+        deltat = self.deltatC
         tau = self.tau
         t0 = self.t_0_subinterval
         f_list = self.PDEs.f
@@ -878,9 +883,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             t_tag = float(t_now + self.deltat * tau_last)
 
             # Save a fresh Function to avoid renaming side-effects on live fields
-            u_last_node = self.u_k_act.subfunctions[-1]
-            u_save = Function(u_last_node.function_space(), name="u")
-            u_save.assign(u_last_node)
+            last_fn = self._last_block_as_V(prev=False)
+            u_save = Function(last_fn.function_space(), name="u")
+            u_save.assign(last_fn)
             afile.save_function(u_save, idx=save_idx, timestepping_info={"time": t_tag})
 
             if use_exact:
@@ -920,7 +925,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             )
             t_tag = float(t_now + self.deltat * tau_last)
 
-            vtk.write(self.u_k_act.subfunctions[-1], time=t_tag)
+            vtk.write(self._get_last_state_view(), time=t_tag)
             if analysis and vtk_coll is not None:
                 vtk_coll.write(self.u_collocation.subfunctions[-1], time=t_tag)
             if use_exact and vtk_exact is not None:
