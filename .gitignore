@@ -1,8 +1,0 @@
-*.pvd
-.DS_Store
-*.pyc
-tests/
-code_testing/
-heatSDC/
-__pycache__/
-
