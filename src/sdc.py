@@ -506,6 +506,28 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             "sweep_vs_real_timeL2": sweep_vs_real_timeL2,
         }
 
+    def _safe_f(self, f_i, t, ui, vi, U_tuple=None):
+        """
+        Admite ambas firmas de f_i:
+        - antigua: f_i(t, ui, vi)
+        - nueva:   f_i(t, ui, vi, U_tuple)
+        """
+        try:
+            return f_i(t, ui, vi, U_tuple)
+        except TypeError:
+            return f_i(t, ui, vi)
+
+    def _safe_f(self, f_i, t, ui, vi, U_tuple=None):
+        """
+        Admite ambas firmas de f_i:
+        - antigua: f_i(t, ui, vi)
+        - nueva:   f_i(t, ui, vi, U_tuple)
+        """
+        try:
+            return f_i(t, ui, vi, U_tuple)
+        except TypeError:
+            return f_i(t, ui, vi)
+
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
     def _setup_full_collocation_solver(self):
         """
@@ -526,10 +548,20 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 Rm = inner(u_c_split[idx] - u0_c_split[idx], w_split[idx])
                 for j in range(self.M):
                     jdx = p + j * self.lenV
+                    start_j = j * self.lenV
+                    U_j_tuple = tuple(
+                        u_c_split[start_j + pp] for pp in range(self.lenV)
+                    )
                     Rm -= (
                         deltat
                         * Q[m, j]
-                        * f_i(t0 + tau[j] * deltat, u_c_split[jdx], w_split[idx])
+                        * self._safe_f(
+                            f_i,
+                            t0 + tau[j] * deltat,
+                            u_c_split[jdx],
+                            w_split[idx],
+                            U_j_tuple,
+                        )
                     )
                 R_coll += Rm * dx
 
@@ -567,23 +599,30 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             u_m = self.Uk_act[m]
             vV = TestFunction(self.V)
 
+            # Nota: en tu caso de calor 1D (V escalar) esto coincide con la versión previa.
             u_split = split(u_m)
             v_split = split(vV)
             u0_split = split(self.U0[m])
+            u_prev_splits = [split(self.Uk_prev[j]) for j in range(self.M)]
 
             Rm_int = 0
             t_m = t0 + tau[m] * deltat
-            u_prev_splits = [split(self.Uk_prev[j]) for j in range(self.M)]
             for p, f_i in enumerate(f_list):
+                U_m_tuple = u_split
                 left_p = inner(u_split[p], v_split[p]) - deltat * self.scale * Q_D[
                     m, m
-                ] * f_i(t_m, u_split[p], v_split[p])
+                ] * self._safe_f(f_i, t_m, u_split[p], v_split[p], U_m_tuple)
                 right_p = inner(u0_split[p], v_split[p])
                 for j in range(self.M):
                     t_j = t0 + tau[j] * deltat
                     coeff = Q[m, j] - self.scale * Q_D[m, j]
+                    U_j_tuple = u_prev_splits[j]
                     right_p += (
-                        deltat * coeff * f_i(t_j, u_prev_splits[j][p], v_split[p])
+                        deltat
+                        * coeff
+                        * self._safe_f(
+                            f_i, t_j, u_prev_splits[j][p], v_split[p], U_j_tuple
+                        )
                     )
                 Rm_int += left_p - right_p
 
@@ -601,7 +640,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     "pc_type": "lu",
                 },
             )
-
             self._sweep_meta.append(
                 {"solver_index": len(self.sweep_solvers), "node": m}
             )
@@ -710,7 +748,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         Q_D = self.Q_D
 
         self.sweep_solvers = []
-        # Registrar meta único para el solver global
         self._sweep_meta = [{"solver_index": 0, "global": True}]
         self.R_sweep = []
 
@@ -719,27 +756,37 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 m = p + i_m * self.lenV
                 v_m = v_split[m]
                 u_m = u_k_act_tup[m]
+
+                start_m = i_m * self.lenV
+                U_m_tuple = tuple(u_k_act_tup[start_m + pp] for pp in range(self.lenV))
                 left = (
                     inner(u_m, v_m)
                     - deltat
                     * self.scale
                     * Q_D[i_m, i_m]
-                    * f_i(t0 + tau[i_m] * deltat, u_m, v_m)
+                    * self._safe_f(f_i, t0 + tau[i_m] * deltat, u_m, v_m, U_m_tuple)
                 ) * dx
+
                 right = inner(u_0.subfunctions[m], v_m)
                 for j in range(self.M):
                     jdx = p + j * self.lenV
                     coeff = Q[i_m, j] - self.scale * Q_D[i_m, j]
+                    start_j = j * self.lenV
+                    U_j_tuple = tuple(
+                        u_k_prev.subfunctions[start_j + pp] for pp in range(self.lenV)
+                    )
                     right += (
                         deltat
                         * coeff
-                        * f_i(
+                        * self._safe_f(
+                            f_i,
                             t0 + tau[j] * deltat,
                             u_k_prev.subfunctions[jdx],
                             v_m,
+                            U_j_tuple,
                         )
                     )
-                right = right * dx
+                right *= dx
                 R_sweep += left - right
 
         self.R_sweep = [R_sweep]
