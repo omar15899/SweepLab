@@ -32,25 +32,28 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         analysis: bool = False,
     ):
         """
-        Mesh : Predermined mesh
-        f: python function class object where the expression of the
-            f(t, x, u(t, x)) part of the heat equation is written in
-            UFL. It needs to be already written in weak form and
-            after integration by parts.
-        V: Initial basis space
-        bcs: python function calls object where its
-        prectype : MIN-SR-FLEX, MIN-SR-S, DIAG1, ...,
-        tau: personalised nodes
-
-        -----
-        All the iterables are ment to solve systems of equations.
-
-        From what I heard we can combine and nest different function spaces
-        over the same mesh and they will be flattened. Also we can mix
-        MixedFunctionSpace with VectorFunctionSpace
-
+        Parameters
+        ----------
+        mesh : Mesh
+            Spatial mesh used by the PDE system.
+        PDEs : PDESystem
+            Container with V, boundary conditions, RHS f, and u0.
+        M : int
+            Number of collocation nodes.
+        dt : float
+            Base time step.
+        is_parallel : bool
+            Use parallel-over-nodes on V (True) or a global solve on W (False).
+        solver_parameters : dict | None
+            PETSc solver options for each nonlinear solve.
+        prectype : int | str
+            Preconditioner selector for Q_Δ (e.g. "MIN-SR-FLEX").
+        tau : np.ndarray | None
+            Custom collocation nodes in [0,1]; default rule from SDCPreconditioners otherwise.
+        file_name, folder_name, path_name, mode : I/O controls
+        analysis : bool
+            Build collocation solver and compute metrics.
         """
-        # Initialise FileNamer
         FileNamer.__init__(
             self,
             file_name=file_name,
@@ -58,7 +61,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             path_name=path_name,
             mode=mode,
         )
-        # Initialise preconditioner infrastructure
         SDCPreconditioners.__init__(
             self,
             M=M,
@@ -73,52 +75,32 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         self.is_parallel = is_parallel
         self.solver_parameters = solver_parameters
         self.analysis = analysis
-
-        # --- PETSc logging: output file and start logging ---
         self._log_txt = Path(self.file).with_suffix("").as_posix() + "_petsc.log"
         try:
             PETSc.Log.begin()
         except Exception:
             pass
         self._petsc_viewer = None
-
-        # For time measuring, we define two list of dictionaries
         self._sweep_meta: list[dict] = []
         self._timings_buffer: list[dict] = []
 
-        # Dealing with the whole system of pdes
-        # Create the mixed Function space of all of them
         self.V = self.PDEs.V
         self.lenV = len(self.V.subspaces) if self.PDEs._is_Mixed else 1
 
-        # Instantiate boundary conditions and test functions:
         self.bcs_V = self.PDEs.boundary_conditions
         self.uses_W = (not self.is_parallel) or self.analysis
         if self.uses_W:
-            # In order to match spatial and temporal discretisation,
-            # we create a MixedFunctionSpace in order to have a bag
-            # of individual function space objects, so when we create
-            # a function in this space we are creating M functions, one
-            # for each node M defined
+
             self.W = MixedFunctionSpace([self.V] * self.M)
-            # Also we could use the * operator to create the MixedFunctionSpace,
-            # self.W is a flat list of subspaces, theres no nested subspaces
-            # except for the vectorfunctionspaces. self.V is flattened before
-            # being instantiated in PDESystem.
             self.bcs_W, self.bcs_V_2 = self._define_node_time_boundary_setup()
-            # Define the residuals
             self.R_sweep = []
             self.R_coll = 0
 
-            # Define the actual functions, if we want to retrieve
-            # the list of functions for each coordinate use split.
             self.u_0 = Function(self.W, name="u_0")
             self.u_k_prev = Function(self.W, name="u_k")
             self.u_k_act = Function(self.W, name="u_{k+1}")
 
             if self.analysis:
-                # In order to compare the collocation problem with the solutions,
-                # we need to create
                 self.u_0_collocation = Function(self.W, name="u_0 collocation")
                 self.u_collocation = Function(self.W, name="u_collocation")
                 self._init_collocation_from_u0()
@@ -135,18 +117,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             self.u_k_act = None
             self.u_0_collocation = None
             self.u_collocation = None
-            # Debemos pensar que lo que se define en el espacio finito es la base
-            # del espacio finito ghlobal, nada más, justamente lo que hace Function
-            # es definir las coordenadas de la función con respecto a esa base (y
-            # bueno más cosas). Para más información mirar mi librería de finite
-            # elements.
 
-        # --- Nodal lists on V (always present) ---
         self.U0 = [Function(self.V, name=f"U0[{m}]") for m in range(self.M)]
         self.Uk_prev = [Function(self.V, name=f"Uk_prev[{m}]") for m in range(self.M)]
         self.Uk_act = [Function(self.V, name=f"Uk_act[{m}]") for m in range(self.M)]
-        # As all the functions are vectorial in the codomain due
-        # to the nodal discretisation of the temporal axis
+
         for m in range(self.M):
             if self.PDEs._is_Mixed:
                 for p in range(self.lenV):
@@ -164,21 +139,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         if self.uses_W:
             self._sync_W_from_V()
 
-        # Initial time and instantiate the solvers
         self.t_0_subinterval = Constant(0.0)
         self.scale = Constant(1.0)
 
         if not self.is_parallel:
-            # Global necesita W
             assert self.uses_W, "Global solver requires W."
             self._setup_global_sweep_solver()
         else:
             self._setup_parallel_sweep_solver_V()
 
         if self.analysis:
-            # El solver de colocación se formula sobre W
             if not self.uses_W:
-                # análisis necesita W para comparar con colocación
                 self.W = MixedFunctionSpace([self.V] * self.M)
                 self.u_0 = Function(self.W, name="u_0")
                 self.u_k_prev = Function(self.W, name="u_k")
@@ -192,6 +163,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
             self._setup_full_collocation_solver()
 
     def _init_collocation_from_u0(self):
+        """
+        Initialize collocation unknowns (u_0_collocation, u_collocation)
+        from the PDE's initial condition.
+        """
         if (
             not self.analysis
             or self.u_0_collocation is None
@@ -213,6 +188,10 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 uc.interpolate(self.PDEs.u0)
 
     def _sync_W_from_V(self):
+        """
+        Copy current states stored in V layout (Uk_act, Uk_prev, U0)
+        into the corresponding flattened W layout functions.
+        """
         if getattr(self, "W", None) is None or any(
             getattr(self, nm, None) is None for nm in ("u_k_act", "u_k_prev", "u_0")
         ):
@@ -235,17 +214,19 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 self.u_0.subfunctions[idx].assign(self.U0[m])
 
     def _sync_all_nodes_to_last(self):
-        # Caso paralelo con layout V: V es la verdad, y (solo si hace falta)
-        # reflejamos a W cuando haga falta para análisis.
+        """
+        Synchronize all node states so they equal the last node.
+
+        - Parallel (V layout): all Uk_act/Uk_prev/U0 are set to the last V block.
+        - Global (W layout): all W subfunctions are set to the last block.
+        """
         if self.is_parallel:
             last_V = self.Uk_act[-1]
             for coll in (self.Uk_act, self.Uk_prev, self.U0):
                 for u in coll:
                     u.assign(last_V)
-            # NO toques W aquí; ya sincronizas W<-V donde lo necesitas (antes de análisis)
             return
 
-        # En global (y en paralelo layout W), W es la verdad.
         last_W = self.u_k_act.subfunctions[-1]
         for sub in (
             *self.u_k_act.subfunctions,
@@ -256,13 +237,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     def _last_block_as_V(self, prev: bool = False) -> Function:
         """
-        Devuelve el estado del último nodo temporal (m = M-1) como Function(self.V),
-        agregando todas las componentes del mixto.
+        Return the last temporal node (m = M-1) as a Function(self.V),
+        aggregating mixed components when needed.
+
+        Parameters
+        ----------
+        prev : bool
+            If True, return from Uk_prev; otherwise from Uk_act.
         """
         if self.is_parallel:
             return self.Uk_prev[-1] if prev else self.Uk_act[-1]
 
-        # Global: reconstruir desde W → V
         out = Function(self.V)
         src_vec = self.u_k_prev if prev else self.u_k_act
         for p in range(self.lenV):
@@ -271,18 +256,25 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         return out
 
     def _get_last_state_view(self):
+        """
+        Return a view of the last node state:
+
+        - Parallel mode: Uk_act[-1].
+        - Global mode: last subfunction of u_k_act.
+        """
         if self.is_parallel:
             return self.Uk_act[-1]
-        # Global o paralelo con W
         return self.u_k_act.subfunctions[-1]
 
     def _total_residual_sweep_aggregated(self) -> float:
+        """
+        Compute aggregated L2 norm of residuals across all sweep equations.
+        """
         if not self.R_sweep:
             return 0.0
         if len(self.R_sweep) == 1:
             vec = assemble(self.R_sweep[0]).riesz_representation()
             return float(norm(vec, norm_type="L2"))
-        # Paralelo: suma de normas de cada residual
         total = 0.0
         for Rm in self.R_sweep:
             vec = assemble(Rm).riesz_representation()
@@ -290,7 +282,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         return total
 
     def _write_and_close_log(self):
-        """Dump PETSc log al fichero y cerrar el viewer explícitamente (seguro en cluster)."""
+        """
+        Write PETSc log to disk and close/destroy the viewer safely (cluster-safe).
+        """
         try:
             viewer = getattr(self, "_petsc_viewer", None)
             if viewer is None:
@@ -315,57 +309,25 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     def _define_node_time_boundary_setup(self):
         """
-        Need to be very awayre of how Firedrake flattens
-        MixedFunctionSpace, we have a lot of tests in
-        boundary_conditions.py. Also have a look to my notes
-        in Notability.
+        Reconstruct DirichletBC objects on the W layout (one per node/component).
 
-        1. Firedrake flattens any nested MixedFunctionSpaces, so
-            at the end what we always have with the subspaces atribute
-            is that gives us an iterator with the flattened result
-            (FunctionSpace, VectorFunctionSpace, FunctionSpace, FunctionSpace...)
-            but inside this iterable we wont find MixedFunctionSpaces.
-            The value_size attr will give the whole dimension of the MixedFS.
-            For instance if the previous tupple has dimensions (1, 4, 1, 1)
-            respectively value_size will be 7
-        2. Now, to deal with the VectorFunctionSpaces (they are like MixedFunctionSpaces
-            but in contiguous memory space) is a little different, as
-            VectorFunctions will have always len() = 1 subspaces iterable.
-            Also it does not accept a nested VFS over other VFS, it must be
-            seen as an individual FunctionSpace.
-        3. Based on the structure of our code, there's no possible BC defined
-            over the whole MFS, as the later is created within the PDESystem
-            class, so the user is not allowed to define any bc over self.W,
-            and thus we can ignore this case in the code.
-        4. When a MFS is created, the subspaces that conforms it are copied,
-            so the boundary conditions need to be also reassign to this new
-            copies.
-
-        +. No matter if in _setup_paralell_sweep_solver we are working with
-            self.V test,
-
+        Returns
+        -------
+        tuple_bcs : tuple
+            All reconstructed BCs.
+        dict_local_bcs : dict[int, list]
+            Map from flat W indices to applicable BCs.
+        EquationBC is currently ignored.
         """
 
         if not self.PDEs.boundary_conditions:
             return ([], {})
-        # if self.is_parallel:
-        #     return list(self.PDEs.boundary_conditions)
 
         bcs = []
         local_bcs = {}
         for bc in self.PDEs.boundary_conditions:
             if isinstance(bc, DirichletBC):
-                # First, we need to retrieve the index of the subspace
-                # for which the boundary condition acts
-                # and, if it is a VFS, the sub_idx. We use the
-                # internal attribute _indices in order to retrieve both of
-                # them in the second case. To characterise the VFS we know
-                # that it's value_shape attribute will have a.l 1 parameter.
-                ## CAN WE HAVE A 1D VECTORFUNCTIONSPACE? HOW CAN I CHARACTERISE
-                # A VECTORFUNCTIONSPACE
-                bc_function_space = (
-                    bc.function_space()
-                )  # it gives us the subspace in which vs is defined.
+                bc_function_space = bc.function_space()
                 idx, sub_idx = (
                     (
                         (
@@ -384,10 +346,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 for m_node in range(self.M):
                     subspace = self.W.sub(idx + m_node * self.lenV)
                     subspace = subspace if sub_idx is None else subspace.sub(sub_idx)
-                    # As Firedrake flattens the MixedFunctionSpace,
-                    # we cannot have another MixedFunctionSpace nested!
                     local_bc = bc.reconstruct(V=(subspace))
-                    # local_bc = bc
                     bcs.append(local_bc)
                     local_bcs.setdefault(idx + m_node * self.lenV, []).append(local_bc)
 
@@ -400,6 +359,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("sweep_loop_execution")
     def _sweep_loop(self):
+        """
+        Execute one sweep across all nodes/components, measuring solver wall-times.
+        """
         self._timings_buffer.clear()
         for i, s in enumerate(self.sweep_solvers):
             t0 = time.perf_counter()
@@ -423,6 +385,11 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         use_collocation: bool,
         use_exact: bool,
     ) -> dict[str, float | None]:
+        """
+        Compute diagnostic metrics: residuals, error norms, H1 seminorms,
+        and time-L2 norms between sweep, collocation, and exact solutions.
+        """
+
         total_residual_sweep = self._total_residual_sweep_aggregated()
 
         if use_collocation:
@@ -541,12 +508,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("_setup_full_collocation_solver")
     def _setup_full_collocation_solver(self):
+        """
+        Build the global collocation solver on W for analysis metrics.
+        """
         deltat, tau, t0, f = self.deltatC, self.tau, self.t_0_subinterval, self.PDEs.f
         Q = self.Q
         w = TestFunction(self.W)
-        # We could use the mixed space but it's nonsense, as we don't have coupling
-        # among the different finite element subspaces.
-        # We store the solvers
         u_c = self.u_collocation
         u0_c = self.u_0_collocation
         u_c_split = split(u_c)
@@ -582,7 +549,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
     @PETSc.Log.EventDecorator("_setup_parallel_sweep_solver_V")
     def _setup_parallel_sweep_solver_V(self):
-        """ """
+        """
+        Build one nonlinear solve per node on V (parallel-over-nodes mode).
+        """
         deltat = self.deltatC
         tau = self.tau
         t0 = self.t_0_subinterval
@@ -641,46 +610,31 @@ class SDCSolver(FileNamer, SDCPreconditioners):
     @PETSc.Log.EventDecorator("_setup_paralell_sweep_solver")
     def _setup_paralell_sweep_solver(self):
         """
-        Compute the solvers for the parallel case.
-
-        + IMPORTANT: We create the test function over V because each
-        subfunction of W has as function_space() attribute which
-        points to the subspace of W where the basis of the function
-        is defined. As there's no coupled systems, we just need to
-        work with the basis of that finite_element space, ignoring
-        the rest of W.
-
+        Build global nonlinear solve on W using accumulated residuals
+        over all nodes/components.
         """
-        deltat = self.deltat
+        deltat = self.deltatC
         tau = self.tau
         t0 = self.t_0_subinterval
         f = self.PDEs.f
         Q = self.Q
         Q_D = self.Q_D
-        # We could use the mixed space but it's nonsense, as we don't have coupling
-        # among the different finite element subspaces.
-        # We store the solvers
         self.sweep_solvers = []
         self.R_sweep = []
 
-        # We now instantiate also de residual of the original collocation problem
-        # in order to study the convergence of the sweeps.
         for p, f_i in enumerate(f):
             for m in range(self.M):
                 idx = p + m * self.lenV
                 u_m = self.u_k_act.subfunctions[idx]
                 v_m = TestFunction(u_m.function_space())
-                #  assemble the part with u^{k+1}. We have to be very carefull as
-                # v_m will be included in the function f.
                 left = (
                     inner(u_m, v_m)
                     - deltat
                     * self.scale
                     * Q_D[m, m]
                     * f_i(t0 + tau[m] * deltat, u_m, v_m)
-                ) * dx  # f need to be composed with the change of variables
+                ) * dx
 
-                # assemble part with u^{k}
                 right = inner(self.u_0.subfunctions[idx], v_m)
                 for j in range(self.M):
                     jdx = p + j * self.lenV
@@ -694,23 +648,12 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     right += deltat * coeff * f_value
 
                 right = right * dx
-
-                # Define the functional for that specific node
                 R_sweep = left - right
 
                 self.R_sweep.append(R_sweep)
-
-                # Rebuild BCs on the exact trial space of this node/component
                 u_space = u_m.function_space()
-                # bcs_local = tuple(
-                #     bc.reconstruct(V=u_space) for bc in self.bcs_V_2.get(idx, [])
-                # )
                 bcs_local = self.bcs_V
-
-                # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
                 problem_m = NonlinearVariationalProblem(R_sweep, u_m, bcs=bcs_local)
-
-                # Add some parameters for analysis.
                 self._sweep_meta.append(
                     {
                         "solver_index": len(self.sweep_solvers),
@@ -720,8 +663,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         "lenV": self.lenV,
                     }
                 )
-
-                # Append the solver
                 self.sweep_solvers.append(
                     NonlinearVariationalSolver(
                         problem_m,
@@ -752,7 +693,7 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         the optimal
         """
 
-        deltat = self.deltat
+        deltat = self.deltatC
         tau = self.tau
         t0 = self.t_0_subinterval
         u_0 = self.u_0
@@ -776,24 +717,17 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         for p, f_i in enumerate(f):
             for i_m in range(self.M):
                 m = p + i_m * self.lenV
-                # As in my notes, each test function is independemt from the rest
                 v_m = v_split[m]
-                # retrieve m-coordinate of the vector function
                 u_m = u_k_act_tup[m]
-                #  assemble the part with u^{k+1}. We have to be very carefull as
-                # v_m will be included in the function f.
                 left = (
                     inner(u_m, v_m)
                     - deltat
                     * self.scale
                     * Q_D[i_m, i_m]
                     * f_i(t0 + tau[i_m] * deltat, u_m, v_m)
-                ) * dx  # f need to be composed with the change of variables
-
-                # assemble part with u^{k}
+                ) * dx
                 right = inner(u_0.subfunctions[m], v_m)
                 for j in range(self.M):
-                    # we need to select the correct functions.
                     jdx = p + j * self.lenV
                     coeff = Q[i_m, j] - self.scale * Q_D[i_m, j]
                     right += (
@@ -806,13 +740,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                         )
                     )
                 right = right * dx
-
-                # Add to general residual functional
                 R_sweep += left - right
 
         self.R_sweep = [R_sweep]
-
-        # Colin asked me to use Nonlinear instead of Solve, is there any specific reason?
         problem_m = NonlinearVariationalProblem(R_sweep, u_k_act, bcs=self.bcs_W)
         self.sweep_solvers.append(
             NonlinearVariationalSolver(
@@ -839,8 +769,16 @@ class SDCSolver(FileNamer, SDCPreconditioners):
         max_diadic: int = 10000,
     ):
         """
-        Ejecuta time-stepping SDC. Funciona con layout paralelo "V" o "W",
-        y global. Si analysis=True, se usa W para métricas/colocación.
+        Run SDC time stepping for final time T with given number of sweeps.
+
+        Modes
+        -----
+        - Parallel V layout
+        - Global W layout
+
+        If `analysis=True`, also solve the full collocation problem and
+        compute convergence/error metrics. Optionally compare with an exact
+        solution expression.
         """
         try:
 
@@ -873,11 +811,9 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     real_u = Function(self.W, name="u_exact")
 
                     X0 = self.PDEs.coord
-                    # tiempo como Constant reutilizable
                     self._t_exact = Constant(0.0)
                     self._exact_expr = real_solution_exp(X0, self._t_exact)
 
-                    # Inicializa u_exact con t inicial sin recompilar
                     for u in real_u.subfunctions:
                         u.interpolate(self._exact_expr)
 
@@ -894,7 +830,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 ]
             }
 
-            # Estride diádico (potencia de 2)
             save_max = max_diadic
             N_steps_total = int(np.ceil(T / float(self.deltat)))
             base_stride = max(1, int(np.ceil((N_steps_total + 1) / float(save_max))))
@@ -954,6 +889,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
 
                     while t < T:
                         dt_eff = min(self.deltat, T - t)
+                        if dt_eff <= 1e-14:
+                            break
                         self.deltatC.assign(dt_eff)
                         self.t_0_subinterval.assign(t)
                         if self.PDEs.time_dependent_constants_bts:
@@ -1139,6 +1076,8 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                 while t < T:
                     print(f"step {step}  t={t:.4e}")
                     dt_eff = min(self.deltat, T - t)
+                    if dt_eff <= 1e-14:
+                        break
                     self.deltatC.assign(dt_eff)
                     self.t_0_subinterval.assign(t)
                     if self.PDEs.time_dependent_constants_bts:
@@ -1237,7 +1176,6 @@ class SDCSolver(FileNamer, SDCPreconditioners):
                     json.dump(convergence_results, f, indent=2)
                 return step - 1
         finally:
-            # Cierre del log de PETSc (si está disponible)
             try:
                 self._write_and_close_log()
             except Exception:
