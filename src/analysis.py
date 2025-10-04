@@ -11,13 +11,7 @@ import gc
 
 @contextmanager
 def pub_style(width_in=3.25, height_in=None, fontsize=9):
-    """
-    Context manager to apply a publication-grade Matplotlib style
-    (single-figure layout, LaTeX-like fonts, tight spacing).
-    width_in ~ 3.25in fits 1-column; use ~6.5in for 2-column.
-    """
     if height_in is None:
-        # Golden ratio-ish height for aesthetics
         height_in = width_in * 0.62
     old = plt.rcParams.copy()
     try:
@@ -54,9 +48,6 @@ def pub_style(width_in=3.25, height_in=None, fontsize=9):
 def save_pub_figure(
     fig, stem: str, folder: str = "figures", dpi: int = 300, also_pdf: bool = True
 ):
-    """
-    Save a figure with FileNamer in PNG (and optionally PDF for vector quality).
-    """
     namer_png = FileNamer(file_name=stem, folder_name=folder, mode="png")
     fig.savefig(namer_png.file, dpi=dpi)
     if also_pdf:
